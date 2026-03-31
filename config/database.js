@@ -1,21 +1,30 @@
 const { Pool } = require("pg");
 require("dotenv").config();
 
-// Use environment variables for database connection
+// Force IPv4 by using the IPv4 address directly
+// Get IPv4 address of your Supabase host
+const supabaseHost = "db.dadijjngukeccdhntmrg.supabase.co";
+
 const pool = new Pool({
-  host: process.env.PGHOST || "localhost",
+  host: supabaseHost,
   port: parseInt(process.env.PGPORT || "5432"),
-  database: process.env.PGDATABASE || "biasharapro",
+  database: process.env.PGDATABASE || "postgres",
   user: process.env.PGUSER || "postgres",
   password: process.env.PGPASSWORD,
-  ssl: process.env.PGSSLMODE ? { rejectUnauthorized: false } : false,
-  // Force IPv4 to avoid IPv6 issues with Supabase
+  ssl: {
+    rejectUnauthorized: false,
+  },
+  // Force IPv4 by setting family to 4
   family: 4,
   connectionTimeoutMillis: 10000,
   keepAlive: true,
-  // Retry settings
-  max: 20,
-  idleTimeoutMillis: 30000,
+  // Disable DNS caching to force fresh lookup
+  lookup: (hostname, options, callback) => {
+    const dns = require("dns");
+    // Force IPv4 lookup only
+    options.family = 4;
+    dns.lookup(hostname, options, callback);
+  },
 });
 
 // Test connection
