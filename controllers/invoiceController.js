@@ -1,585 +1,343 @@
-const nodemailer = require("nodemailer");
+const { query, getClient } = require("../config/database");
+const emailService = require("../services/emailService");
 
-class EmailService {
-  constructor() {
-    this.transporter = null;
-    this.init();
-  }
-
-  init() {
-    // Use direct transport - sends email directly without SMTP
-    // This bypasses Gmail's IPv6 issues
-    this.transporter = nodemailer.createTransport({
-      direct: true, // Direct delivery to recipient's mail server
-      name: "biasharapro.onrender.com", // Your domain
-    });
-    console.log("✅ Email service initialized (Direct delivery)");
-  }
-
-  // Send invoice email
-  async sendInvoiceEmail(invoice, business, pdfBuffer = null) {
-    try {
-      const customerEmail = invoice.customer_email;
-      if (!customerEmail) {
-        console.log("No customer email, skipping");
-        return { success: false, message: "No customer email" };
-      }
-
-      const subject = `Invoice ${invoice.invoice_number} from ${business.name}`;
-      const html = this.generateInvoiceHTML(invoice, business);
-
-      const mailOptions = {
-        from: `"${business.name}" <${business.email || "noreply@biasharapro.onrender.com"}>`,
-        to: customerEmail,
-        subject: subject,
-        html: html,
-      };
-
-      const info = await this.transporter.sendMail(mailOptions);
-      console.log(`✅ Email sent to ${customerEmail}`);
-      return { success: true, messageId: info.messageId };
-    } catch (error) {
-      console.error("Email error:", error.message);
-      return { success: false, error: error.message };
-    }
-  }
-
-  // Send receipt email
-  async sendReceiptEmail(invoice, business, payment) {
-    try {
-      const customerEmail = invoice.customer_email;
-      if (!customerEmail) {
-        return { success: false, message: "No customer email" };
-      }
-
-      const subject = `Payment Receipt - Invoice ${invoice.invoice_number}`;
-      const html = this.generateReceiptHTML(invoice, business, payment);
-
-      const mailOptions = {
-        from: `"${business.name}" <${business.email || "noreply@biasharapro.onrender.com"}>`,
-        to: customerEmail,
-        subject: subject,
-        html: html,
-      };
-
-      await this.transporter.sendMail(mailOptions);
-      console.log(`✅ Receipt sent to ${customerEmail}`);
-      return { success: true };
-    } catch (error) {
-      console.error("Receipt error:", error.message);
-      return { success: false, error: error.message };
-    }
-  }
-
-  // Send welcome email
-  async sendWelcomeEmail(user, business) {
-    try {
-      const subject = `Welcome to ${business.name} - BiasharaPro`;
-      const html = this.generateWelcomeHTML(user, business);
-
-      const mailOptions = {
-        from: `"BiasharaPro" <noreply@biasharapro.onrender.com>`,
-        to: user.email,
-        subject: subject,
-        html: html,
-      };
-
-      await this.transporter.sendMail(mailOptions);
-      console.log(`✅ Welcome email sent to ${user.email}`);
-      return { success: true };
-    } catch (error) {
-      console.error("Welcome email error:", error.message);
-      return { success: false, error: error.message };
-    }
-  }
-
-  // Send low stock alert
-  async sendLowStockAlert(business, products) {
-    try {
-      const adminEmail = business.email;
-      const subject = `Low Stock Alert - ${business.name}`;
-      const html = this.generateLowStockHTML(business, products);
-
-      const mailOptions = {
-        from: `"BiasharaPro" <alerts@biasharapro.onrender.com>`,
-        to: adminEmail,
-        subject: subject,
-        html: html,
-      };
-
-      await this.transporter.sendMail(mailOptions);
-      console.log(`✅ Low stock alert sent to ${adminEmail}`);
-      return { success: true };
-    } catch (error) {
-      console.error("Low stock alert error:", error.message);
-      return { success: false, error: error.message };
-    }
-  }
-
-  // Generate Invoice HTML (keep your existing beautiful HTML)
-  generateInvoiceHTML(invoice, business) {
-    const status = invoice.status || "pending";
-    const subtotal = parseFloat(invoice.subtotal || 0).toFixed(2);
-    const vatAmount = parseFloat(invoice.vat_amount || 0).toFixed(2);
-    const totalAmount = parseFloat(invoice.total_amount || 0).toFixed(2);
-    const amountPaid = parseFloat(invoice.amount_paid || 0).toFixed(2);
-    const balance = (
-      parseFloat(invoice.total_amount || 0) -
-      parseFloat(invoice.amount_paid || 0)
-    ).toFixed(2);
-
-    const itemsHtml =
-      invoice.items
-        ?.map(
-          (item) => `
-        <tr>
-            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0;">${item.product_name || item.description || "Item"}</td>
-            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: center;">${item.quantity || 0}</td>
-            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: right;">KES ${parseFloat(item.unit_price || 0).toFixed(2)}</td>
-            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: right;">KES ${parseFloat(item.total || 0).toFixed(2)}</td>
-          </tr>
-    `,
-        )
-        .join("") ||
-      '<tr><td colspan="4" style="padding: 12px; text-align: center;">No items</td></tr>';
-
-    const statusColor = status === "paid" ? "#10b981" : "#f59e0b";
-    const statusText = status.toUpperCase();
-
-    return `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Invoice ${invoice.invoice_number || ""}</title>
-            <style>
-                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-                * { margin: 0; padding: 0; box-sizing: border-box; }
-                body { 
-                    font-family: 'Inter', Arial, sans-serif; 
-                    background: #f8fafc; 
-                    padding: 40px 20px;
-                    line-height: 1.5;
-                }
-                .invoice-container {
-                    max-width: 800px;
-                    margin: 0 auto;
-                    background: white;
-                    border-radius: 20px;
-                    box-shadow: 0 20px 40px -12px rgba(0,0,0,0.1);
-                    overflow: hidden;
-                }
-                .invoice-header {
-                    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-                    padding: 40px;
-                    color: white;
-                }
-                .header-content {
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: flex-start;
-                    flex-wrap: wrap;
-                    gap: 20px;
-                }
-                .company-info h1 {
-                    font-size: 28px;
-                    margin-bottom: 8px;
-                    font-weight: 700;
-                }
-                .company-info p {
-                    color: #94a3b8;
-                    font-size: 14px;
-                    margin: 4px 0;
-                }
-                .invoice-title {
-                    text-align: right;
-                }
-                .invoice-title h2 {
-                    font-size: 32px;
-                    font-weight: 700;
-                    margin-bottom: 8px;
-                }
-                .invoice-title .status {
-                    display: inline-block;
-                    padding: 6px 16px;
-                    background: ${statusColor};
-                    border-radius: 30px;
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: white;
-                }
-                .invoice-details {
-                    display: flex;
-                    justify-content: space-between;
-                    padding: 30px 40px;
-                    background: #f8fafc;
-                    border-bottom: 1px solid #e2e8f0;
-                    flex-wrap: wrap;
-                    gap: 20px;
-                }
-                .detail-box h3 {
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: #64748b;
-                    text-transform: uppercase;
-                    letter-spacing: 1px;
-                    margin-bottom: 12px;
-                }
-                .detail-box p {
-                    font-size: 14px;
-                    color: #1e293b;
-                    margin: 4px 0;
-                    font-weight: 500;
-                }
-                .items-table {
-                    padding: 0 40px 30px;
-                }
-                .items-table table {
-                    width: 100%;
-                    border-collapse: collapse;
-                }
-                .items-table th {
-                    text-align: left;
-                    padding: 12px;
-                    background: #f1f5f9;
-                    font-weight: 600;
-                    font-size: 13px;
-                    color: #475569;
-                }
-                .totals {
-                    padding: 0 40px 30px;
-                    text-align: right;
-                    border-top: 2px solid #e2e8f0;
-                    margin-top: 20px;
-                }
-                .totals-row {
-                    display: flex;
-                    justify-content: flex-end;
-                    gap: 40px;
-                    margin-top: 20px;
-                }
-                .totals-item {
-                    text-align: right;
-                }
-                .totals-item .label {
-                    font-size: 14px;
-                    color: #64748b;
-                    margin-bottom: 4px;
-                }
-                .totals-item .value {
-                    font-size: 20px;
-                    font-weight: 700;
-                    color: #1e293b;
-                }
-                .grand-total {
-                    margin-top: 15px;
-                    padding-top: 15px;
-                    border-top: 2px solid #e2e8f0;
-                }
-                .grand-total .value {
-                    font-size: 28px;
-                    color: #10b981;
-                }
-                .footer {
-                    background: #f8fafc;
-                    padding: 30px 40px;
-                    text-align: center;
-                    border-top: 1px solid #e2e8f0;
-                }
-                .footer p {
-                    font-size: 12px;
-                    color: #94a3b8;
-                    margin: 8px 0;
-                }
-                .etims-badge {
-                    background: #fef3c7;
-                    padding: 12px;
-                    border-radius: 8px;
-                    margin: 20px 0;
-                    text-align: center;
-                }
-                @media (max-width: 600px) {
-                    .invoice-header, .invoice-details, .items-table, .totals, .footer {
-                        padding-left: 20px;
-                        padding-right: 20px;
-                    }
-                    .header-content {
-                        flex-direction: column;
-                        text-align: center;
-                    }
-                    .invoice-title {
-                        text-align: center;
-                    }
-                    .totals-row {
-                        flex-direction: column;
-                        gap: 10px;
-                    }
-                }
-            </style>
-        </head>
-        <body>
-            <div class="invoice-container">
-                <div class="invoice-header">
-                    <div class="header-content">
-                        <div class="company-info">
-                            <h1>${business.name || "BiasharaPro"}</h1>
-                            <p>${business.email || ""}</p>
-                            <p>KRA PIN: ${business.kra_pin || "N/A"}</p>
-                            <p>Phone: ${business.phone || "N/A"}</p>
-                        </div>
-                        <div class="invoice-title">
-                            <h2>INVOICE</h2>
-                            <div class="status">${statusText}</div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="invoice-details">
-                    <div class="detail-box">
-                        <h3>BILL TO</h3>
-                        <p><strong>${invoice.customer_name || "N/A"}</strong></p>
-                        ${invoice.customer_phone ? `<p>${invoice.customer_phone}</p>` : ""}
-                        ${invoice.customer_email ? `<p>${invoice.customer_email}</p>` : ""}
-                    </div>
-                    <div class="detail-box">
-                        <h3>INVOICE DETAILS</h3>
-                        <p><strong>Invoice #:</strong> ${invoice.invoice_number || "N/A"}</p>
-                        <p><strong>Date:</strong> ${invoice.created_at ? new Date(invoice.created_at).toLocaleDateString() : new Date().toLocaleDateString()}</p>
-                        <p><strong>Due Date:</strong> ${invoice.due_date ? new Date(invoice.due_date).toLocaleDateString() : "Upon receipt"}</p>
-                    </div>
-                </div>
-
-                <div class="items-table">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Item</th>
-                                <th style="text-align: center;">Quantity</th>
-                                <th style="text-align: right;">Unit Price</th>
-                                <th style="text-align: right;">Total</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${itemsHtml}
-                        </tbody>
-                    </table>
-                </div>
-
-                <div class="totals">
-                    <div class="totals-row">
-                        <div class="totals-item">
-                            <div class="label">Subtotal</div>
-                            <div class="value">KES ${subtotal}</div>
-                        </div>
-                        <div class="totals-item">
-                            <div class="label">VAT (16%)</div>
-                            <div class="value">KES ${vatAmount}</div>
-                        </div>
-                    </div>
-                    <div class="grand-total">
-                        <div class="totals-item">
-                            <div class="label">TOTAL</div>
-                            <div class="value">KES ${totalAmount}</div>
-                        </div>
-                    </div>
-                    ${
-                      amountPaid > 0
-                        ? `
-                    <div class="totals-row" style="margin-top: 20px;">
-                        <div class="totals-item">
-                            <div class="label">Amount Paid</div>
-                            <div class="value" style="color: #10b981;">KES ${amountPaid}</div>
-                        </div>
-                        <div class="totals-item">
-                            <div class="label">Balance Due</div>
-                            <div class="value" style="color: ${balance > 0 ? "#f59e0b" : "#10b981"};">KES ${balance}</div>
-                        </div>
-                    </div>
-                    `
-                        : ""
-                    }
-                </div>
-
-                ${
-                  invoice.etims_qr_code
-                    ? `
-                <div class="etims-badge">
-                    <p style="font-weight: 600; color: #92400e;">✓ KRA eTIMS Verified</p>
-                    <p style="font-size: 11px;">Reference: ${invoice.etims_reference || "N/A"}</p>
-                </div>
-                `
-                    : ""
-                }
-
-                <div class="footer">
-                    <p><strong>Payment Instructions</strong></p>
-                    <p>M-Pesa Paybill: 123456 | Account: ${invoice.invoice_number || "INVOICE"}</p>
-                    <p>Bank: Equity Bank | Account: 1234567890 | Branch: Nairobi</p>
-                    <hr style="margin: 15px 0; border: none; border-top: 1px solid #e2e8f0;">
-                    <p>Thank you for your business!</p>
-                    <p style="font-size: 10px;">This is a computer-generated document. No signature required.</p>
-                </div>
-            </div>
-        </body>
-        </html>
-    `;
-  }
-
-  // Generate Receipt HTML
-  generateReceiptHTML(invoice, business, payment) {
-    const amountPaid = parseFloat(invoice.amount_paid || 0).toFixed(2);
-    const totalAmount = parseFloat(invoice.total_amount || 0).toFixed(2);
-    const balance = (
-      parseFloat(invoice.total_amount || 0) -
-      parseFloat(invoice.amount_paid || 0)
-    ).toFixed(2);
-    const paymentAmount = parseFloat(payment?.amount || 0).toFixed(2);
-
-    return `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <title>Payment Receipt</title>
-            <style>
-                body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-                .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-                .header { background: #27ae60; color: white; padding: 20px; text-align: center; }
-                .content { padding: 20px; }
-                .payment-details { background: #f9f9f9; padding: 15px; margin: 20px 0; border-radius: 5px; }
-                .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; border-top: 1px solid #eee; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>PAYMENT RECEIPT</h1>
-                </div>
-                <div class="content">
-                    <div class="payment-details">
-                        <p><strong>Receipt for Invoice:</strong> ${invoice.invoice_number || "N/A"}</p>
-                        <p><strong>Date:</strong> ${new Date().toLocaleString()}</p>
-                        <p><strong>Customer:</strong> ${invoice.customer_name || "N/A"}</p>
-                        <p><strong>Amount Paid:</strong> KES ${paymentAmount}</p>
-                        <p><strong>Payment Method:</strong> ${payment?.payment_method || "M-Pesa"}</p>
-                        ${payment?.mpesa_receipt_number ? `<p><strong>M-Pesa Receipt:</strong> ${payment.mpesa_receipt_number}</p>` : ""}
-                        <p><strong>Total Paid to Date:</strong> KES ${amountPaid}</p>
-                        <p><strong>Remaining Balance:</strong> KES ${balance}</p>
-                    </div>
-                </div>
-                <div class="footer">
-                    <p>${business.name || "BiasharaPro"} | ${business.email || ""}</p>
-                    <p>Thank you for your payment!</p>
-                </div>
-            </div>
-        </body>
-        </html>
-    `;
-  }
-
-  // Generate Welcome HTML
-  generateWelcomeHTML(user, business) {
-    return `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <title>Welcome to BiasharaPro</title>
-            <style>
-                body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-                .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-                .header { background: #3498db; color: white; padding: 20px; text-align: center; }
-                .content { padding: 20px; }
-                .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>Welcome to BiasharaPro!</h1>
-                </div>
-                <div class="content">
-                    <p>Hello ${user.first_name || user.email},</p>
-                    <p>Your business <strong>${business.name}</strong> has been successfully registered on BiasharaPro.</p>
-                    <p>You can now:</p>
-                    <ul>
-                        <li>Manage your products and inventory</li>
-                        <li>Create professional invoices</li>
-                        <li>Accept M-Pesa payments</li>
-                        <li>Generate KRA eTIMS compliant invoices</li>
-                        <li>View real-time business reports</li>
-                    </ul>
-                    <p>Login to your dashboard: <a href="${process.env.CLIENT_URL || "http://localhost:3000"}">${process.env.CLIENT_URL || "http://localhost:3000"}</a></p>
-                    <p>Thank you for choosing BiasharaPro!</p>
-                </div>
-                <div class="footer">
-                    <p>BiasharaPro - Business Management for Kenyan SMEs</p>
-                </div>
-            </div>
-        </body>
-        </html>
-    `;
-  }
-
-  // Generate Low Stock HTML
-  generateLowStockHTML(business, products) {
-    const productsHtml = products
-      .map(
-        (p) => `
-          <tr>
-            <td style="padding: 8px; border-bottom: 1px solid #eee;">${p.name}</td>
-            <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.stock_quantity}</td>
-            <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.reorder_level}</td>
-            <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.reorder_level - p.stock_quantity}</td>
-          </tr>
-        `,
-      )
-      .join("");
-
-    return `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <title>Low Stock Alert</title>
-            <style>
-                body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-                .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-                .header { background: #e67e22; color: white; padding: 20px; text-align: center; }
-                .content { padding: 20px; }
-                table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-                th { background: #e67e22; color: white; padding: 10px; }
-                .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>⚠️ Low Stock Alert</h1>
-                </div>
-                <div class="content">
-                    <p>Hello ${business.name},</p>
-                    <p>The following products are running low on stock and need reordering:</p>
-                    <table>
-                        <thead>
-                            <tr><th>Product</th><th>Current Stock</th><th>Reorder Level</th><th>Order Needed</th></tr>
-                        </thead>
-                        <tbody>
-                            ${productsHtml}
-                        </tbody>
-                    </table>
-                    <p>Please restock these items to avoid running out.</p>
-                    <p>Login to your dashboard to create purchase orders: <a href="${process.env.CLIENT_URL || "http://localhost:3000"}">${process.env.CLIENT_URL || "http://localhost:3000"}</a></p>
-                </div>
-                <div class="footer">
-                    <p>BiasharaPro - Automated Stock Alerts</p>
-                </div>
-            </div>
-        </body>
-        </html>
-    `;
-  }
+// Generate unique invoice number
+async function generateInvoiceNumber(businessId) {
+  const result = await query(
+    `SELECT COUNT(*) as count FROM invoices 
+         WHERE business_id = $1 
+         AND EXTRACT(YEAR FROM created_at) = EXTRACT(YEAR FROM CURRENT_DATE)`,
+    [businessId],
+  );
+  const count = parseInt(result.rows[0].count) + 1;
+  const year = new Date().getFullYear();
+  return `INV-${year}-${count.toString().padStart(4, "0")}`;
 }
 
-module.exports = new EmailService();
+// Create new invoice
+const createInvoice = async (req, res) => {
+  let client;
+
+  try {
+    const { businessId } = req.user;
+    const { customerName, customerPhone, customerEmail, items, notes } =
+      req.body;
+
+    // Validate
+    if (!customerName || !items || items.length === 0) {
+      return res
+        .status(400)
+        .json({ error: "Customer name and at least one item required" });
+    }
+
+    // Log the email to debug
+    console.log("Creating invoice for:", customerName, "Email:", customerEmail);
+
+    // Calculate totals
+    let subtotal = 0;
+    let vatAmount = 0;
+
+    const invoiceItems = [];
+
+    for (const item of items) {
+      // Get product to verify stock and get details
+      const productResult = await query(
+        "SELECT name, selling_price, stock_quantity FROM products WHERE id = $1 AND business_id = $2",
+        [item.productId, businessId],
+      );
+
+      if (productResult.rows.length === 0) {
+        return res
+          .status(404)
+          .json({ error: `Product ${item.productId} not found` });
+      }
+
+      const product = productResult.rows[0];
+
+      // Check stock
+      if (product.stock_quantity < item.quantity) {
+        return res.status(400).json({
+          error: `Insufficient stock for ${product.name}. Available: ${product.stock_quantity}`,
+        });
+      }
+
+      const unitPrice = item.unitPrice || product.selling_price;
+      const itemTotal = item.quantity * unitPrice;
+      const itemVat = (itemTotal * (item.vatRate || 16)) / 100;
+
+      subtotal += itemTotal;
+      vatAmount += itemVat;
+
+      invoiceItems.push({
+        productId: item.productId,
+        productName: product.name,
+        quantity: item.quantity,
+        unitPrice: unitPrice,
+        vatRate: item.vatRate || 16,
+        vatAmount: itemVat,
+        total: itemTotal,
+      });
+    }
+
+    const totalAmount = subtotal + vatAmount;
+    const invoiceNumber = await generateInvoiceNumber(businessId);
+
+    // Start transaction
+    client = await getClient();
+    await client.query("BEGIN");
+
+    // Create invoice
+    const invoiceResult = await client.query(
+      `INSERT INTO invoices (business_id, invoice_number, customer_name, customer_phone, customer_email, subtotal, vat_amount, total_amount, notes, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id, invoice_number, total_amount, created_at, customer_email`,
+      [
+        businessId,
+        invoiceNumber,
+        customerName,
+        customerPhone,
+        customerEmail,
+        subtotal,
+        vatAmount,
+        totalAmount,
+        notes,
+        "pending",
+      ],
+    );
+
+    const invoiceId = invoiceResult.rows[0].id;
+
+    // Create invoice items and update stock
+    for (const item of invoiceItems) {
+      await client.query(
+        `INSERT INTO invoice_items (invoice_id, product_id, product_name, quantity, unit_price, vat_rate, vat_amount, total)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          invoiceId,
+          item.productId,
+          item.productName,
+          item.quantity,
+          item.unitPrice,
+          item.vatRate,
+          item.vatAmount,
+          item.total,
+        ],
+      );
+
+      // Reduce stock
+      await client.query(
+        "UPDATE products SET stock_quantity = stock_quantity - $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+        [item.quantity, item.productId],
+      );
+    }
+
+    await client.query("COMMIT");
+
+    // Send email with invoice
+    try {
+      const businessInfo = await query(
+        "SELECT name, email, kra_pin FROM businesses WHERE id = $1",
+        [businessId],
+      );
+
+      const invoiceData = invoiceResult.rows[0];
+
+      if (invoiceData.customer_email) {
+        console.log("Sending invoice email to:", invoiceData.customer_email);
+        await emailService.sendInvoiceEmail(invoiceData, businessInfo.rows[0]);
+        console.log("✅ Invoice email sent to:", invoiceData.customer_email);
+      } else {
+        console.log("No customer email provided, skipping email");
+      }
+    } catch (emailError) {
+      console.error("Failed to send invoice email:", emailError.message);
+    }
+
+    res.status(201).json({
+      success: true,
+      message: "Invoice created successfully",
+      data: {
+        id: invoiceId,
+        invoiceNumber: invoiceNumber,
+        totalAmount: totalAmount,
+        customerEmail: customerEmail,
+        items: invoiceItems,
+      },
+    });
+  } catch (error) {
+    if (client) {
+      await client.query("ROLLBACK");
+      client.release();
+    }
+    console.error("Create invoice error:", error);
+    res.status(500).json({
+      error: "Failed to create invoice",
+      details:
+        process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+// Get all invoices for business
+const getInvoices = async (req, res) => {
+  try {
+    const { businessId } = req.user;
+
+    const result = await query(
+      `SELECT id, invoice_number, customer_name, customer_email, total_amount, amount_paid, status, created_at
+       FROM invoices
+       WHERE business_id = $1
+       ORDER BY created_at DESC`,
+      [businessId],
+    );
+
+    res.json({
+      success: true,
+      count: result.rows.length,
+      data: result.rows,
+    });
+  } catch (error) {
+    console.error("Get invoices error:", error);
+    res.status(500).json({
+      error: "Failed to get invoices",
+      details:
+        process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+// Get single invoice with items
+const getInvoiceById = async (req, res) => {
+  try {
+    const { businessId } = req.user;
+    const { id } = req.params;
+
+    // Get invoice
+    const invoiceResult = await query(
+      `SELECT * FROM invoices WHERE id = $1 AND business_id = $2`,
+      [id, businessId],
+    );
+
+    if (invoiceResult.rows.length === 0) {
+      return res.status(404).json({ error: "Invoice not found" });
+    }
+
+    // Get invoice items
+    const itemsResult = await query(
+      `SELECT id, product_name, quantity, unit_price, vat_rate, vat_amount, total
+       FROM invoice_items
+       WHERE invoice_id = $1`,
+      [id],
+    );
+
+    const invoice = invoiceResult.rows[0];
+    invoice.items = itemsResult.rows;
+
+    res.json({
+      success: true,
+      data: invoice,
+    });
+  } catch (error) {
+    console.error("Get invoice error:", error);
+    res.status(500).json({
+      error: "Failed to get invoice",
+      details:
+        process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+// Record payment for an invoice
+const recordPayment = async (req, res) => {
+  try {
+    const { businessId } = req.user;
+    const { id } = req.params;
+    const { amount, paymentMethod, reference } = req.body;
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ error: "Valid amount required" });
+    }
+
+    // Get invoice
+    const invoiceResult = await query(
+      "SELECT * FROM invoices WHERE id = $1 AND business_id = $2",
+      [id, businessId],
+    );
+
+    if (invoiceResult.rows.length === 0) {
+      return res.status(404).json({ error: "Invoice not found" });
+    }
+
+    const invoice = invoiceResult.rows[0];
+
+    if (invoice.status === "cancelled") {
+      return res.status(400).json({ error: "Cannot pay cancelled invoice" });
+    }
+
+    const newAmountPaid = parseFloat(invoice.amount_paid) + parseFloat(amount);
+
+    if (newAmountPaid > invoice.total_amount) {
+      return res.status(400).json({
+        error: `Payment exceeds balance. Remaining: KSh ${(invoice.total_amount - invoice.amount_paid).toFixed(2)}`,
+      });
+    }
+
+    const newStatus =
+      newAmountPaid >= invoice.total_amount ? "paid" : "pending";
+
+    // Update invoice
+    await query(
+      `UPDATE invoices 
+       SET amount_paid = $1, status = $2, updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $3`,
+      [newAmountPaid, newStatus, id],
+    );
+
+    // Send receipt email
+    try {
+      const businessInfo = await query(
+        "SELECT name, email, kra_pin FROM businesses WHERE id = $1",
+        [businessId],
+      );
+
+      if (invoice.customer_email) {
+        console.log("Sending receipt email to:", invoice.customer_email);
+        await emailService.sendReceiptEmail(invoice, businessInfo.rows[0], {
+          amount: amount,
+          payment_method: paymentMethod || "cash",
+          mpesa_receipt_number: reference,
+        });
+        console.log("✅ Receipt email sent to:", invoice.customer_email);
+      } else {
+        console.log("No customer email, skipping receipt email");
+      }
+    } catch (emailError) {
+      console.error("Failed to send receipt email:", emailError.message);
+    }
+
+    res.json({
+      success: true,
+      message: `Payment of KSh ${amount} recorded successfully`,
+      data: {
+        invoiceId: id,
+        amountPaid: newAmountPaid,
+        remainingBalance: invoice.total_amount - newAmountPaid,
+        status: newStatus,
+      },
+    });
+  } catch (error) {
+    console.error("Record payment error:", error);
+    res.status(500).json({
+      error: "Failed to record payment",
+      details:
+        process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+module.exports = {
+  createInvoice,
+  getInvoices,
+  getInvoiceById,
+  recordPayment,
+};
