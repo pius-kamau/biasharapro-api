@@ -163,10 +163,11 @@ const createInvoice = async (req, res) => {
           );
         }
 
+        // Call email service WITHOUT pdfBuffer to avoid timeout
         await emailService.sendInvoiceEmail(
           invoiceData,
           businessInfo.rows[0],
-          pdfBuffer,
+          // pdfBuffer,  // COMMENTED OUT - remove PDF to fix timeout
         );
         console.log("✅ Invoice email sent to:", invoiceData.customer_email);
       } else {
