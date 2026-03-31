@@ -1,48 +1,16 @@
 const nodemailer = require("nodemailer");
-const dns = require("dns");
-
-// Force IPv4 for all DNS lookups
-dns.setDefaultResultOrder("ipv4first");
 
 class EmailService {
   constructor() {
-    this.transporter = null;
-    this.init();
+    // Use direct delivery only - no Gmail SMTP (avoids IPv6 issues)
+    this.transporter = nodemailer.createTransport({
+      direct: true,
+      name: "biasharapro.onrender.com",
+    });
+    console.log("✅ Email service initialized (Direct delivery)");
   }
 
-  init() {
-    // Configure email transporter - use Gmail with IPv4 fix
-    if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
-      this.transporter = nodemailer.createTransport({
-        service: "gmail",
-        auth: {
-          user: process.env.EMAIL_USER,
-          pass: process.env.EMAIL_PASS,
-        },
-        tls: {
-          rejectUnauthorized: false,
-        },
-        // Force IPv4
-        family: 4,
-        connectionTimeout: 30000,
-        greetingTimeout: 30000,
-        socketTimeout: 30000,
-      });
-
-      // Verify connection
-      this.transporter.verify((error, success) => {
-        if (error) {
-          console.error("⚠️ Gmail SMTP failed:", error.message);
-        } else {
-          console.log("✅ Email service initialized with Gmail SMTP (IPv4)");
-        }
-      });
-    } else {
-      console.log("⚠️ Email not configured - check EMAIL_USER and EMAIL_PASS");
-    }
-  }
-
-  // Send invoice email - NO PDF ATTACHMENT
+  // Send invoice email
   async sendInvoiceEmail(invoice, business, pdfBuffer = null) {
     try {
       const customerEmail = invoice.customer_email;
@@ -55,25 +23,19 @@ class EmailService {
       const html = this.generateInvoiceHTML(invoice, business);
 
       const mailOptions = {
-        from: `"${business.name}" <${process.env.EMAIL_USER}>`,
+        from: `"${business.name}" <${business.email || "noreply@biasharapro.onrender.com"}>`,
         to: customerEmail,
         subject: subject,
         html: html,
-        // Add headers to avoid spam
         headers: {
           "X-Priority": "3",
           "X-Mailer": "BiasharaPro",
         },
       };
 
-      if (this.transporter) {
-        const info = await this.transporter.sendMail(mailOptions);
-        console.log(`✅ Invoice email sent to ${customerEmail}`);
-        return { success: true };
-      } else {
-        console.log("📧 [SIMULATION] Would send email to:", customerEmail);
-        return { success: true, simulated: true };
-      }
+      const info = await this.transporter.sendMail(mailOptions);
+      console.log(`✅ Invoice email sent to ${customerEmail}`);
+      return { success: true };
     } catch (error) {
       console.error("Email error:", error.message);
       return { success: false, error: error.message };
@@ -92,7 +54,7 @@ class EmailService {
       const html = this.generateReceiptHTML(invoice, business, payment);
 
       const mailOptions = {
-        from: `"${business.name}" <${process.env.EMAIL_USER}>`,
+        from: `"${business.name}" <${business.email || "noreply@biasharapro.onrender.com"}>`,
         to: customerEmail,
         subject: subject,
         html: html,
@@ -102,14 +64,9 @@ class EmailService {
         },
       };
 
-      if (this.transporter) {
-        await this.transporter.sendMail(mailOptions);
-        console.log(`✅ Receipt email sent to ${customerEmail}`);
-        return { success: true };
-      } else {
-        console.log("📧 [SIMULATION] Receipt would be sent");
-        return { success: true, simulated: true };
-      }
+      await this.transporter.sendMail(mailOptions);
+      console.log(`✅ Receipt email sent to ${customerEmail}`);
+      return { success: true };
     } catch (error) {
       console.error("Receipt error:", error.message);
       return { success: false, error: error.message };
@@ -123,7 +80,7 @@ class EmailService {
       const html = this.generateWelcomeHTML(user, business);
 
       const mailOptions = {
-        from: `"BiasharaPro" <${process.env.EMAIL_USER}>`,
+        from: `"BiasharaPro" <noreply@biasharapro.onrender.com>`,
         to: user.email,
         subject: subject,
         html: html,
@@ -133,14 +90,9 @@ class EmailService {
         },
       };
 
-      if (this.transporter) {
-        await this.transporter.sendMail(mailOptions);
-        console.log(`✅ Welcome email sent to ${user.email}`);
-        return { success: true };
-      } else {
-        console.log("📧 [SIMULATION] Welcome email would be sent");
-        return { success: true, simulated: true };
-      }
+      await this.transporter.sendMail(mailOptions);
+      console.log(`✅ Welcome email sent to ${user.email}`);
+      return { success: true };
     } catch (error) {
       console.error("Welcome email error:", error.message);
       return { success: false, error: error.message };
@@ -155,7 +107,7 @@ class EmailService {
       const html = this.generateLowStockHTML(business, products);
 
       const mailOptions = {
-        from: `"BiasharaPro" <${process.env.EMAIL_USER}>`,
+        from: `"BiasharaPro" <alerts@biasharapro.onrender.com>`,
         to: adminEmail,
         subject: subject,
         html: html,
@@ -165,14 +117,9 @@ class EmailService {
         },
       };
 
-      if (this.transporter) {
-        await this.transporter.sendMail(mailOptions);
-        console.log(`✅ Low stock alert sent to ${adminEmail}`);
-        return { success: true };
-      } else {
-        console.log("📧 [SIMULATION] Low stock alert would be sent");
-        return { success: true, simulated: true };
-      }
+      await this.transporter.sendMail(mailOptions);
+      console.log(`✅ Low stock alert sent to ${adminEmail}`);
+      return { success: true };
     } catch (error) {
       console.error("Low stock alert error:", error.message);
       return { success: false, error: error.message };
@@ -196,15 +143,15 @@ class EmailService {
         ?.map(
           (item) => `
         <tr>
-            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0;">${item.product_name || item.description || "Item"}</td>
-            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: center;">${item.quantity || 0}</td>
-            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: right;">KES ${parseFloat(item.unit_price || 0).toFixed(2)}</td>
-            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: right;">KES ${parseFloat(item.total || 0).toFixed(2)}</td>
+            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0;">${item.product_name || item.description || "Item"}<\/td>
+            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: center;">${item.quantity || 0}<\/td>
+            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: right;">KES ${parseFloat(item.unit_price || 0).toFixed(2)}<\/td>
+            <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: right;">KES ${parseFloat(item.total || 0).toFixed(2)}<\/td>
            </tr>
         `,
         )
         .join("") ||
-      '<tr><td colspan="4" style="padding: 12px; text-align: center;">No items</td></tr>';
+      '<tr><td colspan="4" style="padding: 12px; text-align: center;">No items<\/td><\/tr>';
 
     const statusColor = status === "paid" ? "#10b981" : "#f59e0b";
     const statusText = status.toUpperCase();
@@ -591,11 +538,11 @@ class EmailService {
       .map(
         (p) => `
           <tr>
-            <td style="padding: 8px; border-bottom: 1px solid #eee;">${p.name}</td>
-            <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.stock_quantity}</td>
-            <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.reorder_level}</td>
-            <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.reorder_level - p.stock_quantity}</td>
-          </tr>
+            <td style="padding: 8px; border-bottom: 1px solid #eee;">${p.name}<\/td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.stock_quantity}<\/td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.reorder_level}<\/td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.reorder_level - p.stock_quantity}<\/td>
+          <\/tr>
         `,
       )
       .join("");
