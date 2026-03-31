@@ -72,6 +72,15 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/mpesa", mpesaRoutes);
 app.use("/api/reports", reportRoutes);
 
+// Add this after your other routes
+app.get("/api/keep-alive", async (req, res) => {
+  try {
+    await query("SELECT 1");
+    res.json({ status: "alive", timestamp: new Date().toISOString() });
+  } catch (error) {
+    res.status(500).json({ status: "error", error: error.message });
+  }
+});
 // =====================================================
 // DEBUG ROUTES (Temporary - Remove after testing)
 // =====================================================
