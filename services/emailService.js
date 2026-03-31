@@ -1,7 +1,8 @@
 const nodemailer = require("nodemailer");
-const fs = require("fs");
-const path = require("path");
-const Handlebars = require("handlebars");
+const dns = require("dns");
+
+// Force IPv4 for all DNS resolutions
+dns.setDefaultResultOrder("ipv4first");
 
 class EmailService {
   constructor() {
@@ -10,20 +11,33 @@ class EmailService {
   }
 
   init() {
-    // Configure email transporter
-    if (process.env.EMAIL_HOST) {
+    // Configure email transporter with IPv4 force
+    if (
+      process.env.EMAIL_HOST &&
+      process.env.EMAIL_USER &&
+      process.env.EMAIL_PASS
+    ) {
       this.transporter = nodemailer.createTransport({
         host: process.env.EMAIL_HOST,
-        port: process.env.EMAIL_PORT || 587,
+        port: parseInt(process.env.EMAIL_PORT || "587"),
         secure: process.env.EMAIL_SECURE === "true",
         auth: {
           user: process.env.EMAIL_USER,
           pass: process.env.EMAIL_PASS,
         },
+        // Force IPv4
+        family: 4,
+        tls: {
+          rejectUnauthorized: false,
+        },
+        connectionTimeout: 30000,
+        greetingTimeout: 30000,
+        socketTimeout: 30000,
       });
-      console.log("✅ Email service initialized");
+      console.log("✅ Email service initialized with SMTP (IPv4)");
     } else {
       console.log("⚠️ Email service not configured - using console mode");
+      console.log("   Missing: EMAIL_HOST, EMAIL_USER, or EMAIL_PASS");
     }
   }
 
@@ -187,7 +201,7 @@ class EmailService {
             <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: center;">${item.quantity || 0}</td>
             <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: right;">KES ${parseFloat(item.unit_price || 0).toFixed(2)}</td>
             <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: right;">KES ${parseFloat(item.total || 0).toFixed(2)}</td>
-        </tr>
+         </tr>
     `,
         )
         .join("") ||
@@ -475,6 +489,7 @@ class EmailService {
         </html>
     `;
   }
+
   // Generate Receipt HTML
   generateReceiptHTML(invoice, business, payment) {
     const amountPaid = parseFloat(invoice.amount_paid || 0).toFixed(2);
@@ -530,46 +545,45 @@ class EmailService {
   // Generate Welcome HTML
   generateWelcomeHTML(user, business) {
     return `
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="utf-8">
-                <title>Welcome to BiasharaPro</title>
-                <style>
-                    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-                    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-                    .header { background: #3498db; color: white; padding: 20px; text-align: center; }
-                    .content { padding: 20px; }
-                    .button { display: inline-block; padding: 10px 20px; background: #3498db; color: white; text-decoration: none; border-radius: 5px; }
-                    .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <div class="header">
-                        <h1>Welcome to BiasharaPro!</h1>
-                    </div>
-                    <div class="content">
-                        <p>Hello ${user.first_name || user.email},</p>
-                        <p>Your business <strong>${business.name}</strong> has been successfully registered on BiasharaPro.</p>
-                        <p>You can now:</p>
-                        <ul>
-                            <li>Manage your products and inventory</li>
-                            <li>Create professional invoices</li>
-                            <li>Accept M-Pesa payments</li>
-                            <li>Generate KRA eTIMS compliant invoices</li>
-                            <li>View real-time business reports</li>
-                        </ul>
-                        <p>Login to your dashboard: <a href="${process.env.CLIENT_URL || "http://localhost:3000"}">${process.env.CLIENT_URL || "http://localhost:3000"}</a></p>
-                        <p>Thank you for choosing BiasharaPro!</p>
-                    </div>
-                    <div class="footer">
-                        <p>BiasharaPro - Business Management for Kenyan SMEs</p>
-                    </div>
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <title>Welcome to BiasharaPro</title>
+            <style>
+                body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+                .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+                .header { background: #3498db; color: white; padding: 20px; text-align: center; }
+                .content { padding: 20px; }
+                .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>Welcome to BiasharaPro!</h1>
                 </div>
-            </body>
-            </html>
-        `;
+                <div class="content">
+                    <p>Hello ${user.first_name || user.email},</p>
+                    <p>Your business <strong>${business.name}</strong> has been successfully registered on BiasharaPro.</p>
+                    <p>You can now:</p>
+                    <ul>
+                        <li>Manage your products and inventory</li>
+                        <li>Create professional invoices</li>
+                        <li>Accept M-Pesa payments</li>
+                        <li>Generate KRA eTIMS compliant invoices</li>
+                        <li>View real-time business reports</li>
+                    </ul>
+                    <p>Login to your dashboard: <a href="${process.env.CLIENT_URL || "http://localhost:3000"}">${process.env.CLIENT_URL || "http://localhost:3000"}</a></p>
+                    <p>Thank you for choosing BiasharaPro!</p>
+                </div>
+                <div class="footer">
+                    <p>BiasharaPro - Business Management for Kenyan SMEs</p>
+                </div>
+            </div>
+        </body>
+        </html>
+    `;
   }
 
   // Generate Low Stock HTML
@@ -577,58 +591,58 @@ class EmailService {
     const productsHtml = products
       .map(
         (p) => `
-            <tr>
-                <td style="padding: 8px; border-bottom: 1px solid #eee;">${p.name}</td>
-                <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.stock_quantity}</td>
-                <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.reorder_level}</td>
-                <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.reorder_level - p.stock_quantity}</td>
-            </tr>
+         <tr>
+            <td style="padding: 8px; border-bottom: 1px solid #eee;">${p.name}</td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.stock_quantity}</td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.reorder_level}</td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.reorder_level - p.stock_quantity}</td>
+         </tr>
         `,
       )
       .join("");
 
     return `
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="utf-8">
-                <title>Low Stock Alert</title>
-                <style>
-                    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-                    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-                    .header { background: #e67e22; color: white; padding: 20px; text-align: center; }
-                    .content { padding: 20px; }
-                    table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-                    th { background: #e67e22; color: white; padding: 10px; }
-                    .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <div class="header">
-                        <h1>⚠️ Low Stock Alert</h1>
-                    </div>
-                    <div class="content">
-                        <p>Hello ${business.name},</p>
-                        <p>The following products are running low on stock and need reordering:</p>
-                        <table>
-                            <thead>
-                                <tr><th>Product</th><th>Current Stock</th><th>Reorder Level</th><th>Order Needed</th></tr>
-                            </thead>
-                            <tbody>
-                                ${productsHtml}
-                            </tbody>
-                        </table>
-                        <p>Please restock these items to avoid running out.</p>
-                        <p>Login to your dashboard to create purchase orders: <a href="${process.env.CLIENT_URL || "http://localhost:3000"}">${process.env.CLIENT_URL || "http://localhost:3000"}</a></p>
-                    </div>
-                    <div class="footer">
-                        <p>BiasharaPro - Automated Stock Alerts</p>
-                    </div>
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <title>Low Stock Alert</title>
+            <style>
+                body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+                .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+                .header { background: #e67e22; color: white; padding: 20px; text-align: center; }
+                .content { padding: 20px; }
+                table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+                th { background: #e67e22; color: white; padding: 10px; }
+                .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>⚠️ Low Stock Alert</h1>
                 </div>
-            </body>
-            </html>
-        `;
+                <div class="content">
+                    <p>Hello ${business.name},</p>
+                    <p>The following products are running low on stock and need reordering:</p>
+                    <table>
+                        <thead>
+                            <tr><th>Product</th><th>Current Stock</th><th>Reorder Level</th><th>Order Needed</th></tr>
+                        </thead>
+                        <tbody>
+                            ${productsHtml}
+                        </tbody>
+                    </table>
+                    <p>Please restock these items to avoid running out.</p>
+                    <p>Login to your dashboard to create purchase orders: <a href="${process.env.CLIENT_URL || "http://localhost:3000"}">${process.env.CLIENT_URL || "http://localhost:3000"}</a></p>
+                </div>
+                <div class="footer">
+                    <p>BiasharaPro - Automated Stock Alerts</p>
+                </div>
+            </div>
+        </body>
+        </html>
+    `;
   }
 }
 
