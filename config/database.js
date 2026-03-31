@@ -1,15 +1,24 @@
 const { Pool } = require("pg");
 require("dotenv").config();
 
+// Use environment variables for database connection
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false,
-  },
-  family: 4, // Force IPv4
+  host: process.env.PGHOST || "localhost",
+  port: parseInt(process.env.PGPORT || "5432"),
+  database: process.env.PGDATABASE || "biasharapro",
+  user: process.env.PGUSER || "postgres",
+  password: process.env.PGPASSWORD,
+  ssl: process.env.PGSSLMODE ? { rejectUnauthorized: false } : false,
+  // Force IPv4 to avoid IPv6 issues with Supabase
+  family: 4,
   connectionTimeoutMillis: 10000,
+  keepAlive: true,
+  // Retry settings
+  max: 20,
+  idleTimeoutMillis: 30000,
 });
 
+// Test connection
 pool.on("connect", () => {
   console.log("✅ Connected to PostgreSQL");
 });
