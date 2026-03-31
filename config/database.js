@@ -11,7 +11,7 @@ const pool = new Pool({
 });
 
 pool.on("connect", () => {
-  console.log("✅ Connected to PostgreSQL");
+  console.log("✅ Connected to PostgreSQL (Neon)");
 });
 
 pool.on("error", (err) => {
