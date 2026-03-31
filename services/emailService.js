@@ -1,39 +1,37 @@
-const nodemailer = require("nodemailer");
+const { Resend } = require('resend');
 
 class EmailService {
   constructor() {
-    // Use direct delivery only - no Gmail SMTP (avoids IPv6 issues)
-    this.transporter = nodemailer.createTransport({
-      direct: true,
-      name: "biasharapro.onrender.com",
-    });
-    console.log("✅ Email service initialized (Direct delivery)");
+    if (process.env.RESEND_API_KEY) {
+      this.resend = new Resend(process.env.RESEND_API_KEY);
+      console.log("✅ Email service initialized with Resend");
+    } else {
+      console.log("⚠️ Resend not configured - email disabled");
+      this.resend = null;
+    }
   }
 
   // Send invoice email
   async sendInvoiceEmail(invoice, business, pdfBuffer = null) {
     try {
       const customerEmail = invoice.customer_email;
-      if (!customerEmail) {
-        console.log("No customer email, skipping");
-        return { success: false, message: "No customer email" };
+      if (!customerEmail || !this.resend) {
+        console.log(`📧 Would send invoice to: ${customerEmail || 'no email'}`);
+        return { success: true, simulated: true };
       }
 
-      const subject = `Invoice ${invoice.invoice_number} from ${business.name}`;
-      const html = this.generateInvoiceHTML(invoice, business);
+      const { data, error } = await this.resend.emails.send({
+        from: `"${business.name}" <onboarding@resend.dev>`,
+        to: [customerEmail],
+        subject: `Invoice ${invoice.invoice_number} from ${business.name}`,
+        html: this.generateInvoiceHTML(invoice, business),
+      });
 
-      const mailOptions = {
-        from: `"${business.name}" <${business.email || "noreply@biasharapro.onrender.com"}>`,
-        to: customerEmail,
-        subject: subject,
-        html: html,
-        headers: {
-          "X-Priority": "3",
-          "X-Mailer": "BiasharaPro",
-        },
-      };
+      if (error) {
+        console.error("Resend error:", error);
+        return { success: false, error: error.message };
+      }
 
-      const info = await this.transporter.sendMail(mailOptions);
       console.log(`✅ Invoice email sent to ${customerEmail}`);
       return { success: true };
     } catch (error) {
@@ -46,25 +44,23 @@ class EmailService {
   async sendReceiptEmail(invoice, business, payment) {
     try {
       const customerEmail = invoice.customer_email;
-      if (!customerEmail) {
-        return { success: false, message: "No customer email" };
+      if (!customerEmail || !this.resend) {
+        console.log(`📧 Would send receipt to: ${customerEmail || 'no email'}`);
+        return { success: true, simulated: true };
       }
 
-      const subject = `Payment Receipt - Invoice ${invoice.invoice_number}`;
-      const html = this.generateReceiptHTML(invoice, business, payment);
+      const { data, error } = await this.resend.emails.send({
+        from: `"${business.name}" <onboarding@resend.dev>`,
+        to: [customerEmail],
+        subject: `Payment Receipt - Invoice ${invoice.invoice_number}`,
+        html: this.generateReceiptHTML(invoice, business, payment),
+      });
 
-      const mailOptions = {
-        from: `"${business.name}" <${business.email || "noreply@biasharapro.onrender.com"}>`,
-        to: customerEmail,
-        subject: subject,
-        html: html,
-        headers: {
-          "X-Priority": "3",
-          "X-Mailer": "BiasharaPro",
-        },
-      };
+      if (error) {
+        console.error("Resend error:", error);
+        return { success: false, error: error.message };
+      }
 
-      await this.transporter.sendMail(mailOptions);
       console.log(`✅ Receipt email sent to ${customerEmail}`);
       return { success: true };
     } catch (error) {
@@ -76,21 +72,23 @@ class EmailService {
   // Send welcome email
   async sendWelcomeEmail(user, business) {
     try {
-      const subject = `Welcome to ${business.name} - BiasharaPro`;
-      const html = this.generateWelcomeHTML(user, business);
+      if (!this.resend) {
+        console.log(`📧 Would send welcome to: ${user.email}`);
+        return { success: true, simulated: true };
+      }
 
-      const mailOptions = {
-        from: `"BiasharaPro" <noreply@biasharapro.onrender.com>`,
-        to: user.email,
-        subject: subject,
-        html: html,
-        headers: {
-          "X-Priority": "3",
-          "X-Mailer": "BiasharaPro",
-        },
-      };
+      const { data, error } = await this.resend.emails.send({
+        from: `"BiasharaPro" <onboarding@resend.dev>`,
+        to: [user.email],
+        subject: `Welcome to ${business.name} - BiasharaPro`,
+        html: this.generateWelcomeHTML(user, business),
+      });
 
-      await this.transporter.sendMail(mailOptions);
+      if (error) {
+        console.error("Resend error:", error);
+        return { success: false, error: error.message };
+      }
+
       console.log(`✅ Welcome email sent to ${user.email}`);
       return { success: true };
     } catch (error) {
@@ -102,23 +100,24 @@ class EmailService {
   // Send low stock alert
   async sendLowStockAlert(business, products) {
     try {
-      const adminEmail = business.email;
-      const subject = `Low Stock Alert - ${business.name}`;
-      const html = this.generateLowStockHTML(business, products);
+      if (!this.resend) {
+        console.log(`📧 Would send low stock alert to: ${business.email}`);
+        return { success: true, simulated: true };
+      }
 
-      const mailOptions = {
-        from: `"BiasharaPro" <alerts@biasharapro.onrender.com>`,
-        to: adminEmail,
-        subject: subject,
-        html: html,
-        headers: {
-          "X-Priority": "1",
-          "X-Mailer": "BiasharaPro",
-        },
-      };
+      const { data, error } = await this.resend.emails.send({
+        from: `"BiasharaPro Alerts" <onboarding@resend.dev>`,
+        to: [business.email],
+        subject: `Low Stock Alert - ${business.name}`,
+        html: this.generateLowStockHTML(business, products),
+      });
 
-      await this.transporter.sendMail(mailOptions);
-      console.log(`✅ Low stock alert sent to ${adminEmail}`);
+      if (error) {
+        console.error("Resend error:", error);
+        return { success: false, error: error.message };
+      }
+
+      console.log(`✅ Low stock alert sent to ${business.email}`);
       return { success: true };
     } catch (error) {
       console.error("Low stock alert error:", error.message);
@@ -147,11 +146,13 @@ class EmailService {
             <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: center;">${item.quantity || 0}<\/td>
             <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: right;">KES ${parseFloat(item.unit_price || 0).toFixed(2)}<\/td>
             <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: right;">KES ${parseFloat(item.total || 0).toFixed(2)}<\/td>
-           </tr>
+            \n
         `,
         )
         .join("") ||
-      '<tr><td colspan="4" style="padding: 12px; text-align: center;">No items<\/td><\/tr>';
+      '\\n
+
+            <td colspan="4" style="padding: 12px; text-align: center;">No items<\/td>\n        ';
 
     const statusColor = status === "paid" ? "#10b981" : "#f59e0b";
     const statusText = status.toUpperCase();
