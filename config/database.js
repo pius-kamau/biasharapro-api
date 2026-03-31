@@ -1,7 +1,6 @@
 const { Pool } = require("pg");
 require("dotenv").config();
 
-// Use connection pooler for IPv4 support
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
@@ -12,7 +11,7 @@ const pool = new Pool({
 });
 
 pool.on("connect", () => {
-  console.log("✅ Connected to PostgreSQL via Pooler");
+  console.log("✅ Connected to PostgreSQL");
 });
 
 pool.on("error", (err) => {
