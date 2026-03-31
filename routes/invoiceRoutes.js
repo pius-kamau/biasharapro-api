@@ -2,9 +2,9 @@ const express = require("express");
 const router = express.Router();
 const { authenticate, authorize } = require("../middleware/auth");
 const {
+  createInvoice,
   getInvoices,
   getInvoiceById,
-  createInvoice,
   recordPayment,
 } = require("../controllers/invoiceController");
 

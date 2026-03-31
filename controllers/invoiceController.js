@@ -23,24 +23,19 @@ const createInvoice = async (req, res) => {
     const { customerName, customerPhone, customerEmail, items, notes } =
       req.body;
 
-    // Validate
     if (!customerName || !items || items.length === 0) {
       return res
         .status(400)
         .json({ error: "Customer name and at least one item required" });
     }
 
-    // Log the email to debug
     console.log("Creating invoice for:", customerName, "Email:", customerEmail);
 
-    // Calculate totals
     let subtotal = 0;
     let vatAmount = 0;
-
     const invoiceItems = [];
 
     for (const item of items) {
-      // Get product to verify stock and get details
       const productResult = await query(
         "SELECT name, selling_price, stock_quantity FROM products WHERE id = $1 AND business_id = $2",
         [item.productId, businessId],
@@ -54,7 +49,6 @@ const createInvoice = async (req, res) => {
 
       const product = productResult.rows[0];
 
-      // Check stock
       if (product.stock_quantity < item.quantity) {
         return res.status(400).json({
           error: `Insufficient stock for ${product.name}. Available: ${product.stock_quantity}`,
@@ -82,11 +76,9 @@ const createInvoice = async (req, res) => {
     const totalAmount = subtotal + vatAmount;
     const invoiceNumber = await generateInvoiceNumber(businessId);
 
-    // Start transaction
     client = await getClient();
     await client.query("BEGIN");
 
-    // Create invoice
     const invoiceResult = await client.query(
       `INSERT INTO invoices (business_id, invoice_number, customer_name, customer_phone, customer_email, subtotal, vat_amount, total_amount, notes, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
@@ -107,7 +99,6 @@ const createInvoice = async (req, res) => {
 
     const invoiceId = invoiceResult.rows[0].id;
 
-    // Create invoice items and update stock
     for (const item of invoiceItems) {
       await client.query(
         `INSERT INTO invoice_items (invoice_id, product_id, product_name, quantity, unit_price, vat_rate, vat_amount, total)
@@ -124,7 +115,6 @@ const createInvoice = async (req, res) => {
         ],
       );
 
-      // Reduce stock
       await client.query(
         "UPDATE products SET stock_quantity = stock_quantity - $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
         [item.quantity, item.productId],
@@ -133,7 +123,7 @@ const createInvoice = async (req, res) => {
 
     await client.query("COMMIT");
 
-    // Send email with invoice
+    // Send email
     try {
       const businessInfo = await query(
         "SELECT name, email, kra_pin FROM businesses WHERE id = $1",
@@ -146,8 +136,6 @@ const createInvoice = async (req, res) => {
         console.log("Sending invoice email to:", invoiceData.customer_email);
         await emailService.sendInvoiceEmail(invoiceData, businessInfo.rows[0]);
         console.log("✅ Invoice email sent to:", invoiceData.customer_email);
-      } else {
-        console.log("No customer email provided, skipping email");
       }
     } catch (emailError) {
       console.error("Failed to send invoice email:", emailError.message);
@@ -178,7 +166,7 @@ const createInvoice = async (req, res) => {
   }
 };
 
-// Get all invoices for business
+// Get all invoices
 const getInvoices = async (req, res) => {
   try {
     const { businessId } = req.user;
@@ -206,13 +194,12 @@ const getInvoices = async (req, res) => {
   }
 };
 
-// Get single invoice with items
+// Get single invoice
 const getInvoiceById = async (req, res) => {
   try {
     const { businessId } = req.user;
     const { id } = req.params;
 
-    // Get invoice
     const invoiceResult = await query(
       `SELECT * FROM invoices WHERE id = $1 AND business_id = $2`,
       [id, businessId],
@@ -222,7 +209,6 @@ const getInvoiceById = async (req, res) => {
       return res.status(404).json({ error: "Invoice not found" });
     }
 
-    // Get invoice items
     const itemsResult = await query(
       `SELECT id, product_name, quantity, unit_price, vat_rate, vat_amount, total
        FROM invoice_items
@@ -247,7 +233,7 @@ const getInvoiceById = async (req, res) => {
   }
 };
 
-// Record payment for an invoice
+// Record payment
 const recordPayment = async (req, res) => {
   try {
     const { businessId } = req.user;
@@ -258,7 +244,6 @@ const recordPayment = async (req, res) => {
       return res.status(400).json({ error: "Valid amount required" });
     }
 
-    // Get invoice
     const invoiceResult = await query(
       "SELECT * FROM invoices WHERE id = $1 AND business_id = $2",
       [id, businessId],
@@ -285,7 +270,6 @@ const recordPayment = async (req, res) => {
     const newStatus =
       newAmountPaid >= invoice.total_amount ? "paid" : "pending";
 
-    // Update invoice
     await query(
       `UPDATE invoices 
        SET amount_paid = $1, status = $2, updated_at = CURRENT_TIMESTAMP 
@@ -307,9 +291,6 @@ const recordPayment = async (req, res) => {
           payment_method: paymentMethod || "cash",
           mpesa_receipt_number: reference,
         });
-        console.log("✅ Receipt email sent to:", invoice.customer_email);
-      } else {
-        console.log("No customer email, skipping receipt email");
       }
     } catch (emailError) {
       console.error("Failed to send receipt email:", emailError.message);
