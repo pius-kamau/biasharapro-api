@@ -15,6 +15,9 @@ const dashboardRoutes = require("./routes/dashboardRoutes");
 const mpesaRoutes = require("./routes/mpesaRoutes");
 const reportRoutes = require("./routes/reportRoutes");
 
+// Import rate limiter
+const rateLimiter = require("./middleware/rateLimiter");
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
@@ -30,7 +33,7 @@ app.use((req, res, next) => {
 });
 
 // =====================================================
-// HEALTH CHECK ROUTE
+// HEALTH CHECK ROUTE (No rate limit)
 // =====================================================
 app.get("/", (req, res) => {
   res.json({
@@ -42,7 +45,7 @@ app.get("/", (req, res) => {
 });
 
 // =====================================================
-// DATABASE TEST ROUTE
+// DATABASE TEST ROUTE (No rate limit)
 // =====================================================
 app.get("/api/test-db", async (req, res) => {
   try {
@@ -63,6 +66,13 @@ app.get("/api/test-db", async (req, res) => {
 });
 
 // =====================================================
+// RATE LIMITING (Applied to API routes)
+// =====================================================
+// Apply general rate limiting to all API routes
+app.use("/api/", rateLimiter.apiLimiter);
+app.use("/api/", rateLimiter.slowDownLimiter);
+
+// =====================================================
 // API ROUTES
 // =====================================================
 app.use("/api/auth", authRoutes);
@@ -72,7 +82,13 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/mpesa", mpesaRoutes);
 app.use("/api/reports", reportRoutes);
 
-// Add this after your other routes
+// Specific route limiters (applied after routes are defined)
+app.use("/api/auth/login", rateLimiter.authLimiter);
+app.use("/api/auth/register", rateLimiter.authLimiter);
+app.use("/api/mpesa/pay", rateLimiter.mpesaLimiter);
+app.use("/api/invoices", rateLimiter.invoiceSlowDown);
+
+// Keep-alive route
 app.get("/api/keep-alive", async (req, res) => {
   try {
     await query("SELECT 1");
@@ -81,6 +97,7 @@ app.get("/api/keep-alive", async (req, res) => {
     res.status(500).json({ status: "error", error: error.message });
   }
 });
+
 // =====================================================
 // DEBUG ROUTES (Temporary - Remove after testing)
 // =====================================================
@@ -113,7 +130,7 @@ app.get("/api/debug/businesses", async (req, res) => {
 });
 
 // =====================================================
-// M-PESA WEBHOOK CALLBACK (Public - No Auth)
+// M-PESA WEBHOOK CALLBACK (Public - No Auth, No Rate Limit)
 // =====================================================
 app.post("/api/mpesa/callback", express.json(), async (req, res) => {
   try {
@@ -130,7 +147,6 @@ app.post("/api/mpesa/callback", express.json(), async (req, res) => {
         stkCallback;
 
       if (ResultCode === 0) {
-        // Payment successful
         const metadata = {};
         if (CallbackMetadata?.Item) {
           CallbackMetadata.Item.forEach((item) => {
@@ -142,45 +158,39 @@ app.post("/api/mpesa/callback", express.json(), async (req, res) => {
         console.log(`   Receipt: ${metadata.MpesaReceiptNumber}`);
         console.log(`   Amount: ${metadata.Amount}`);
 
-        // Update transaction in database
         const transaction = await query(
           `UPDATE transactions 
-                     SET status = 'completed', 
-                         mpesa_receipt_number = $1,
-                         transaction_date = CURRENT_TIMESTAMP
-                     WHERE mpesa_receipt_number = $2
-                     RETURNING invoice_id, amount`,
+           SET status = 'completed', 
+               mpesa_receipt_number = $1,
+               transaction_date = CURRENT_TIMESTAMP
+           WHERE mpesa_receipt_number = $2
+           RETURNING invoice_id, amount`,
           [metadata.MpesaReceiptNumber, CheckoutRequestID],
         );
 
         if (transaction.rows.length > 0) {
           const { invoice_id, amount } = transaction.rows[0];
-
-          // Update invoice
           await query(
             `UPDATE invoices 
-                         SET amount_paid = amount_paid + $1,
-                             status = CASE 
-                                 WHEN amount_paid + $1 >= total_amount THEN 'paid'
-                                 ELSE status
-                             END
-                         WHERE id = $2`,
+             SET amount_paid = amount_paid + $1,
+                 status = CASE 
+                     WHEN amount_paid + $1 >= total_amount THEN 'paid'
+                     ELSE status
+                 END
+             WHERE id = $2`,
             [amount, invoice_id],
           );
-
           console.log(
             `✅ Invoice ${invoice_id} updated with payment of ${amount}`,
           );
         }
       } else {
         console.log(`❌ Payment failed: ${ResultDesc}`);
-
-        // Update transaction as failed
         await query(
           `UPDATE transactions 
-                     SET status = 'failed', 
-                         notes = $1
-                     WHERE mpesa_receipt_number = $2`,
+           SET status = 'failed', 
+               notes = $1
+           WHERE mpesa_receipt_number = $2`,
           [ResultDesc, CheckoutRequestID],
         );
       }
