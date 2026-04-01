@@ -203,6 +203,14 @@ app.post("/api/mpesa/callback", express.json(), async (req, res) => {
   }
 });
 
+// Test rate limiting endpoint
+app.get("/api/test-rate-limit", (req, res) => {
+  res.json({
+    message: "Rate limit test",
+    timestamp: new Date().toISOString(),
+    remaining: req.rateLimit?.remaining,
+  });
+});
 // =====================================================
 // ERROR HANDLING
 // =====================================================
