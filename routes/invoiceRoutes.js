@@ -57,19 +57,19 @@ const generateInvoiceEmailHTML = (invoice, business) => {
                         ${invoice.customer_email ? `<p><strong>Email:</strong> ${invoice.customer_email}</p>` : ""}
                     </div>
 
-                    <table>
+                     <table>
                         <thead>
-                            <tr>
+                             <tr>
                                 <th>Item</th>
                                 <th style="text-align: center;">Qty</th>
                                 <th style="text-align: right;">Unit Price</th>
                                 <th style="text-align: right;">Total</th>
-                            </tr>
+                             </tr>
                         </thead>
                         <tbody>
                             ${itemsHtml}
                         </tbody>
-                    </table>
+                     </table>
 
                     <div class="total">
                         <p>Subtotal: KES ${invoice.subtotal.toLocaleString()}</p>
@@ -526,8 +526,29 @@ const retryETIMS = async (req, res) => {
 };
 
 // =====================================================
-// EMAIL INVOICE ENDPOINT
+// ROUTES - ORDER MATTERS! Specific routes BEFORE parameter routes
 // =====================================================
+
+// SPECIFIC ROUTES (no parameters) - MUST come first
+router.get("/transactions", authenticate, async (req, res) => {
+  try {
+    const { businessId } = req.user;
+    const result = await query(
+      `SELECT t.*, i.invoice_number 
+       FROM transactions t
+       LEFT JOIN invoices i ON t.invoice_id = i.id
+       WHERE t.business_id = $1
+       ORDER BY t.created_at DESC`,
+      [businessId],
+    );
+    res.json({ success: true, data: result.rows });
+  } catch (error) {
+    console.error("Get transactions error:", error);
+    res.status(500).json({ error: "Failed to get transactions" });
+  }
+});
+
+// EMAIL INVOICE ENDPOINT (specific parameter route)
 router.post(
   "/:id/email",
   authenticate,
@@ -544,9 +565,9 @@ router.post(
 
       const invoiceResult = await query(
         `SELECT i.*, b.name as business_name, b.email as business_email, b.kra_pin
-             FROM invoices i
-             JOIN businesses b ON i.business_id = b.id
-             WHERE i.id = $1 AND i.business_id = $2`,
+         FROM invoices i
+         JOIN businesses b ON i.business_id = b.id
+         WHERE i.id = $1 AND i.business_id = $2`,
         [id, businessId],
       );
 
@@ -558,8 +579,8 @@ router.post(
 
       const itemsResult = await query(
         `SELECT product_name, quantity, unit_price, total
-             FROM invoice_items
-             WHERE invoice_id = $1`,
+         FROM invoice_items
+         WHERE invoice_id = $1`,
         [id],
       );
 
@@ -598,12 +619,7 @@ router.post(
   },
 );
 
-// =====================================================
-// ROUTES
-// =====================================================
-router.get("/", authenticate, getInvoices);
-router.get("/:id", authenticate, getInvoiceById);
-router.post("/", authenticate, authorize("owner", "accountant"), createInvoice);
+// PARAMETER ROUTES (with :id) - MUST come after specific routes
 router.post(
   "/:id/pay",
   authenticate,
@@ -623,92 +639,8 @@ router.post(
   authorize("owner", "accountant"),
   retryETIMS,
 );
-router.post(
-  "/:id/email",
-  authenticate,
-  authorize("owner", "accountant"),
-  async (req, res) => {
-    // Email handler
-    try {
-      const { id } = req.params;
-      const { email } = req.body;
-      const { businessId } = req.user;
+router.get("/:id", authenticate, getInvoiceById);
+router.get("/", authenticate, getInvoices);
+router.post("/", authenticate, authorize("owner", "accountant"), createInvoice);
 
-      if (!email) {
-        return res.status(400).json({ error: "Email address required" });
-      }
-
-      const invoiceResult = await query(
-        `SELECT i.*, b.name as business_name, b.email as business_email, b.kra_pin
-             FROM invoices i
-             JOIN businesses b ON i.business_id = b.id
-             WHERE i.id = $1 AND i.business_id = $2`,
-        [id, businessId],
-      );
-
-      if (invoiceResult.rows.length === 0) {
-        return res.status(404).json({ error: "Invoice not found" });
-      }
-
-      const invoice = invoiceResult.rows[0];
-
-      const itemsResult = await query(
-        `SELECT product_name, quantity, unit_price, total
-             FROM invoice_items
-             WHERE invoice_id = $1`,
-        [id],
-      );
-
-      invoice.items = itemsResult.rows;
-
-      const html = generateInvoiceEmailHTML(invoice, {
-        name: invoice.business_name,
-        email: invoice.business_email,
-        kra_pin: invoice.kra_pin,
-      });
-
-      const { Resend } = require("resend");
-      const resend = new Resend(process.env.RESEND_API_KEY);
-
-      const { data, error } = await resend.emails.send({
-        from: `"${invoice.business_name}" <onboarding@resend.dev>`,
-        to: ["07299kama@gmail.com"],
-        subject: `Invoice ${invoice.invoice_number} from ${invoice.business_name}`,
-        html: html,
-      });
-
-      if (error) {
-        console.error("Resend error:", error);
-        return res.status(500).json({ error: "Failed to send email" });
-      }
-
-      res.json({
-        success: true,
-        message: "Invoice emailed successfully",
-        data: { messageId: data.id },
-      });
-    } catch (error) {
-      console.error("Email invoice error:", error);
-      res.status(500).json({ error: "Failed to send email" });
-    }
-  },
-);
-// Gcd D:\biasharapro\client
-router.get("/transactions", authenticate, async (req, res) => {
-  try {
-    const { businessId } = req.user;
-    const result = await query(
-      `SELECT t.*, i.invoice_number 
-             FROM transactions t
-             LEFT JOIN invoices i ON t.invoice_id = i.id
-             WHERE t.business_id = $1
-             ORDER BY t.transaction_date DESC`,
-      [businessId],
-    );
-    res.json({ success: true, data: result.rows });
-  } catch (error) {
-    console.error("Get transactions error:", error);
-    res.status(500).json({ error: "Failed to get transactions" });
-  }
-});
 module.exports = router;
