@@ -461,13 +461,11 @@ const submitToETIMS = async (req, res) => {
         [etimsResult.error, id],
       );
       await client.query("COMMIT");
-      res
-        .status(500)
-        .json({
-          success: false,
-          error: "eTIMS submission failed",
-          details: etimsResult.error,
-        });
+      res.status(500).json({
+        success: false,
+        error: "eTIMS submission failed",
+        details: etimsResult.error,
+      });
     }
   } catch (error) {
     await client.query("ROLLBACK");
@@ -695,5 +693,22 @@ router.post(
     }
   },
 );
-
+// Gcd D:\biasharapro\client
+router.get("/transactions", authenticate, async (req, res) => {
+  try {
+    const { businessId } = req.user;
+    const result = await query(
+      `SELECT t.*, i.invoice_number 
+             FROM transactions t
+             LEFT JOIN invoices i ON t.invoice_id = i.id
+             WHERE t.business_id = $1
+             ORDER BY t.transaction_date DESC`,
+      [businessId],
+    );
+    res.json({ success: true, data: result.rows });
+  } catch (error) {
+    console.error("Get transactions error:", error);
+    res.status(500).json({ error: "Failed to get transactions" });
+  }
+});
 module.exports = router;
