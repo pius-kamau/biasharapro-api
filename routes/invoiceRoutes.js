@@ -630,7 +630,7 @@ router.delete(
 
       // Check if invoice exists
       const invoice = await query(
-        "SELECT status FROM invoices WHERE id = $1 AND business_id = $2",
+        "SELECT status, invoice_number FROM invoices WHERE id = $1 AND business_id = $2",
         [id, businessId],
       );
 

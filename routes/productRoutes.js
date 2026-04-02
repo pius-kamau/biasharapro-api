@@ -1,5 +1,7 @@
 const express = require("express");
-const { authenticate } = require("../middleware/auth");
+const router = express.Router();
+const { authenticate, authorize } = require("../middleware/auth"); // Add authorize here
+const { query } = require("../config/database");
 const {
   createProduct,
   getProducts,
@@ -32,7 +34,7 @@ router.delete(
 
       // Check if product exists
       const product = await query(
-        "SELECT id FROM products WHERE id = $1 AND business_id = $2",
+        "SELECT id, name FROM products WHERE id = $1 AND business_id = $2",
         [id, businessId],
       );
 
