@@ -1,6 +1,8 @@
 const express = require("express");
 const router = express.Router();
 const crypto = require("crypto");
+const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
 const { authenticate, authorize } = require("../middleware/auth");
 const { query } = require("../config/database");
 const { Resend } = require("resend");
@@ -74,7 +76,6 @@ router.post("/invite", authenticate, authorize("owner"), async (req, res) => {
     ]);
 
     const businessName = business.rows[0].name;
-    // In the invite endpoint, change the inviteLink
     const inviteLink = `${process.env.CLIENT_URL || "http://localhost:3000"}/accept-invitation?token=${token}&email=${encodeURIComponent(email)}`;
 
     // Send invitation email
@@ -229,92 +230,102 @@ router.get("/invite/:token", async (req, res) => {
 });
 
 // Accept invitation (create user account)
-router.post('/accept', async (req, res) => {
-    try {
-        const { token, firstName, lastName, password } = req.body;
-        
-        if (!token || !firstName || !lastName || !password) {
-            return res.status(400).json({ error: 'Missing required fields' });
-        }
-        
-        // Start transaction manually
-        await query('BEGIN');
-        
-        // Get invitation
-        const invitation = await query(
-            `SELECT i.*, b.name as business_name 
-             FROM invitations i
-             JOIN businesses b ON i.business_id = b.id
-             WHERE i.token = $1 AND i.expires_at > NOW()`,
-            [token]
-        );
+router.post("/accept", async (req, res) => {
+  try {
+    const { token, firstName, lastName, password } = req.body;
 
-        if (invitation.rows.length === 0) {
-            await query('ROLLBACK');
-            return res.status(404).json({ error: 'Invitation not found or expired' });
-        }
-        
-        const invite = invitation.rows[0];
-        
-        // Check if user already exists
-        const existingUser = await query(
-            'SELECT id FROM users WHERE email = $1',
-            [invite.email]
-        );
-        
-        if (existingUser.rows.length > 0) {
-            await query('ROLLBACK');
-            return res.status(400).json({ error: 'User already exists with this email' });
-        }
-        
-        // Hash password
-        const bcrypt = require('bcrypt');
-        const passwordHash = await bcrypt.hash(password, 10);
-        
-        // Create user
-        const newUser = await query(
-            `INSERT INTO users (business_id, email, first_name, last_name, password_hash, role, is_active)
-             VALUES ($1, $2, $3, $4, $5, $6, true)
-             RETURNING id, email, first_name, last_name, role`,
-            [invite.business_id, invite.email, firstName, lastName, passwordHash, invite.role]
-        );
-        
-        // Delete invitation
-        await query('DELETE FROM invitations WHERE token = $1', [token]);
-        
-        await query('COMMIT');
-        
-        // Generate JWT token
-        const jwt = require('jsonwebtoken');
-        const authToken = jwt.sign(
-            { userId: newUser.rows[0].id, businessId: invite.business_id, role: invite.role },
-            process.env.JWT_SECRET,
-            { expiresIn: '7d' }
-        );
-        
-        res.json({
-            success: true,
-            message: 'Account created successfully',
-            data: {
-                user: newUser.rows[0],
-                business: { id: invite.business_id, name: invite.business_name },
-                token: authToken
-            }
-        });
-        
-    } catch (error) {
-        await query('ROLLBACK');
-        console.error('Accept invitation error:', error);
-        res.status(500).json({ error: 'Failed to create account' });
+    if (!token || !firstName || !lastName || !password) {
+      return res.status(400).json({ error: "Missing required fields" });
     }
-});
-    // Delete invitation
-    await client.query("DELETE FROM invitations WHERE token = $1", [token]);
 
-    await client.query("COMMIT");
+    // Start transaction
+    await query("BEGIN");
+
+    // Get invitation
+    const invitation = await query(
+      `SELECT i.*, b.name as business_name 
+       FROM invitations i
+       JOIN businesses b ON i.business_id = b.id
+       WHERE i.token = $1 AND i.expires_at > NOW()`,
+      [token],
+    );
+
+    if (invitation.rows.length === 0) {
+      await query("ROLLBACK");
+      return res.status(404).json({ error: "Invitation not found or expired" });
+    }
+
+    const invite = invitation.rows[0];
+
+    // Check if user already exists
+    const existingUser = await query("SELECT id FROM users WHERE email = $1", [
+      invite.email,
+    ]);
+
+    if (existingUser.rows.length > 0) {
+      await query("ROLLBACK");
+      return res
+        .status(400)
+        .json({ error: "User already exists with this email" });
+    }
+
+    // Hash password
+    const bcrypt = require("bcrypt");
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    // Create user
+    const newUser = await query(
+      `INSERT INTO users (business_id, email, first_name, last_name, password_hash, role, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, true)
+       RETURNING id, email, first_name, last_name, role`,
+      [
+        invite.business_id,
+        invite.email,
+        firstName,
+        lastName,
+        passwordHash,
+        invite.role,
+      ],
+    );
+
+    // Delete the invitation
+    await query("DELETE FROM invitations WHERE token = $1", [token]);
+
+    await query("COMMIT");
 
     // Generate JWT token
     const jwt = require("jsonwebtoken");
+    const authToken = jwt.sign(
+      { 
+        userId: newUser.rows[0].id, 
+        businessId: invite.business_id, 
+        role: invite.role 
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    res.json({
+      success: true,
+      message: "Account created successfully",
+      data: {
+        user: newUser.rows[0],
+        business: { id: invite.business_id, name: invite.business_name },
+        token: authToken,
+      },
+    });
+  } catch (error) {
+    await query("ROLLBACK");
+    console.error("Accept invitation error:", error);
+    res.status(500).json({ error: "Failed to create account" });
+  }
+});
+    // Delete invitation
+    await query("DELETE FROM invitations WHERE token = $1", [token]);
+
+    await query("COMMIT");
+
+    // Generate JWT token
     const authToken = jwt.sign(
       {
         userId: newUser.rows[0].id,
@@ -335,11 +346,9 @@ router.post('/accept', async (req, res) => {
       },
     });
   } catch (error) {
-    await client.query("ROLLBACK");
+    await query("ROLLBACK");
     console.error("Accept invitation error:", error);
     res.status(500).json({ error: "Failed to create account" });
-  } finally {
-    client.release();
   }
 });
 
