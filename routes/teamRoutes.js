@@ -74,7 +74,8 @@ router.post("/invite", authenticate, authorize("owner"), async (req, res) => {
     ]);
 
     const businessName = business.rows[0].name;
-    const inviteLink = `${process.env.CLIENT_URL || "http://localhost:3000"}/register?token=${token}&email=${encodeURIComponent(email)}`;
+    // In the invite endpoint, change the inviteLink
+    const inviteLink = `${process.env.CLIENT_URL || "http://localhost:3000"}/accept-invitation?token=${token}&email=${encodeURIComponent(email)}`;
 
     // Send invitation email
     await resend.emails.send({
