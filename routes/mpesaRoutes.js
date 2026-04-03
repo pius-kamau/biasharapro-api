@@ -42,6 +42,11 @@ router.post("/pay/:invoiceId", authenticate, async (req, res) => {
       formattedPhone = "254" + formattedPhone;
     }
 
+    console.log(
+      `Initiating M-Pesa payment for invoice ${invoiceData.invoice_number}`,
+    );
+    console.log(`Phone: ${formattedPhone}, Amount: ${amountDue}`);
+
     // Initiate STK Push
     const result = await mpesaService.stkPush(
       formattedPhone,
@@ -51,11 +56,16 @@ router.post("/pay/:invoiceId", authenticate, async (req, res) => {
     );
 
     if (!result.success) {
+      console.error("STK Push failed:", result.error);
       return res.status(400).json({
         error: "Failed to initiate payment",
         details: result.error,
       });
     }
+
+    console.log(
+      `STK Push initiated. CheckoutRequestID: ${result.checkoutRequestId}`,
+    );
 
     // Store transaction
     await query(
@@ -69,7 +79,7 @@ router.post("/pay/:invoiceId", authenticate, async (req, res) => {
         "pending",
         result.checkoutRequestId,
         formattedPhone,
-        "Payment initiated",
+        "Payment initiated - waiting for user to complete",
       ],
     );
 
@@ -107,6 +117,10 @@ router.post("/callback", async (req, res) => {
       const { ResultCode, ResultDesc, CheckoutRequestID, CallbackMetadata } =
         stkCallback;
 
+      console.log(
+        `Callback ResultCode: ${ResultCode}, ResultDesc: ${ResultDesc}`,
+      );
+
       if (ResultCode === 0) {
         // Payment successful
         const metadata = {};
@@ -120,6 +134,7 @@ router.post("/callback", async (req, res) => {
         console.log(`   Receipt: ${metadata.MpesaReceiptNumber}`);
         console.log(`   Amount: ${metadata.Amount}`);
 
+        // Update transaction
         const transaction = await query(
           `UPDATE transactions 
            SET status = 'completed', 
@@ -190,13 +205,16 @@ router.get("/status/:checkoutRequestId", authenticate, async (req, res) => {
   try {
     let { checkoutRequestId } = req.params;
 
-    // FIX: Validate checkoutRequestId
+    console.log(`Status check for checkoutRequestId: ${checkoutRequestId}`);
+
+    // Validate checkoutRequestId
     if (
       !checkoutRequestId ||
       checkoutRequestId === "undefined" ||
       checkoutRequestId === "null" ||
       checkoutRequestId === ""
     ) {
+      console.log("Invalid checkoutRequestId, returning pending");
       return res.json({
         success: true,
         resultCode: "1",
@@ -215,6 +233,10 @@ router.get("/status/:checkoutRequestId", authenticate, async (req, res) => {
 
     if (transaction.rows.length > 0) {
       const tx = transaction.rows[0];
+      console.log(
+        `Transaction found in DB: status=${tx.status}, notes=${tx.notes}`,
+      );
+
       let resultCode = "1";
       let resultDesc = tx.notes || "Payment pending";
       let mpesaReceiptNumber = tx.mpesa_receipt_number;
@@ -247,6 +269,7 @@ router.get("/status/:checkoutRequestId", authenticate, async (req, res) => {
     }
 
     // Return pending status if transaction not found
+    console.log("Transaction not found in DB, returning pending");
     return res.json({
       success: true,
       resultCode: "1",
