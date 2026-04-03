@@ -65,11 +65,11 @@ const register = async (req, res) => {
     // Start transaction
     await client.query("BEGIN");
 
-    // Create business
+    // Create business with trial period (14 days)
     const businessResult = await client.query(
-      `INSERT INTO businesses (name, kra_pin, email, phone, industry, location, status)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
-             RETURNING id`,
+      `INSERT INTO businesses (name, kra_pin, email, phone, industry, location, status, subscription_tier, subscription_expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW() + INTERVAL '14 days')
+       RETURNING id`,
       [
         businessName,
         kraPin,
@@ -78,6 +78,7 @@ const register = async (req, res) => {
         industry,
         location,
         "active",
+        "starter",
       ],
     );
 
@@ -86,8 +87,8 @@ const register = async (req, res) => {
     // Create owner user
     const userResult = await client.query(
       `INSERT INTO users (business_id, email, phone, first_name, last_name, password_hash, role)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
-             RETURNING id`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id`,
       [
         businessId,
         ownerEmail,
@@ -109,7 +110,8 @@ const register = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: "Business registered successfully",
+      message:
+        "Business registered successfully. Your 14-day free trial has started!",
       data: {
         token,
         user: {
@@ -124,6 +126,10 @@ const register = async (req, res) => {
           name: businessName,
           kra_pin: kraPin,
           email: businessEmail,
+          subscription_tier: "starter",
+          subscription_expires_at: new Date(
+            Date.now() + 14 * 24 * 60 * 60 * 1000,
+          ),
         },
       },
     });
@@ -153,10 +159,10 @@ const login = async (req, res) => {
 
     // Find user
     const userResult = await query(
-      `SELECT u.*, b.name as business_name, b.status as business_status, b.kra_pin, b.email as business_email
-             FROM users u
-             JOIN businesses b ON u.business_id = b.id
-             WHERE u.email = $1 AND u.is_active = true`,
+      `SELECT u.*, b.name as business_name, b.status as business_status, b.kra_pin, b.email as business_email, b.subscription_tier, b.subscription_expires_at
+       FROM users u
+       JOIN businesses b ON u.business_id = b.id
+       WHERE u.email = $1 AND u.is_active = true`,
       [email],
     );
 
@@ -169,6 +175,18 @@ const login = async (req, res) => {
     // Check if business is active
     if (user.business_status !== "active") {
       return res.status(403).json({ error: "Business account is not active" });
+    }
+
+    // Check if trial has expired
+    if (
+      user.subscription_expires_at &&
+      new Date(user.subscription_expires_at) < new Date()
+    ) {
+      return res.status(403).json({
+        error:
+          "Your free trial has expired. Please upgrade to continue using BiasharaPro.",
+        trialExpired: true,
+      });
     }
 
     // Verify password
@@ -185,6 +203,14 @@ const login = async (req, res) => {
 
     // Generate token
     const token = generateToken(user.id, user.business_id, user.role);
+
+    // Calculate days remaining in trial
+    const daysRemaining = user.subscription_expires_at
+      ? Math.ceil(
+          (new Date(user.subscription_expires_at) - new Date()) /
+            (1000 * 60 * 60 * 24),
+        )
+      : 0;
 
     res.json({
       success: true,
@@ -205,6 +231,9 @@ const login = async (req, res) => {
           kra_pin: user.kra_pin,
           email: user.business_email,
           status: user.business_status,
+          subscription_tier: user.subscription_tier,
+          subscription_expires_at: user.subscription_expires_at,
+          trial_days_remaining: daysRemaining,
         },
       },
     });
@@ -223,11 +252,11 @@ const getProfile = async (req, res) => {
   try {
     const result = await query(
       `SELECT u.id, u.email, u.phone, u.first_name, u.last_name, u.role, u.is_active,
-                    b.id as business_id, b.name as business_name, b.kra_pin, b.industry, 
-                    b.location, b.status as business_status, b.subscription_tier
-             FROM users u
-             JOIN businesses b ON u.business_id = b.id
-             WHERE u.id = $1`,
+              b.id as business_id, b.name as business_name, b.kra_pin, b.industry, 
+              b.location, b.status as business_status, b.subscription_tier, b.subscription_expires_at
+       FROM users u
+       JOIN businesses b ON u.business_id = b.id
+       WHERE u.id = $1`,
       [req.user.id],
     );
 
@@ -235,9 +264,18 @@ const getProfile = async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
+    // Calculate days remaining in trial
+    const expiresAt = result.rows[0].subscription_expires_at;
+    const daysRemaining = expiresAt
+      ? Math.ceil((new Date(expiresAt) - new Date()) / (1000 * 60 * 60 * 24))
+      : 0;
+
     res.json({
       success: true,
-      data: result.rows[0],
+      data: {
+        ...result.rows[0],
+        trial_days_remaining: daysRemaining > 0 ? daysRemaining : 0,
+      },
     });
   } catch (error) {
     console.error("Profile error:", error);
