@@ -618,43 +618,36 @@ router.post(
     }
   },
 );
-// Delete invoice (only if not paid)
-router.delete(
-  "/:id",
-  authenticate,
-  authorize("owner", "accountant"),
-  async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { businessId } = req.user;
 
-      // Check if invoice exists
-      const invoice = await query(
-        "SELECT status, invoice_number FROM invoices WHERE id = $1 AND business_id = $2",
-        [id, businessId],
-      );
+// Delete invoice - ONLY OWNER can delete
+router.delete("/:id", authenticate, authorize("owner"), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { businessId } = req.user;
 
-      if (invoice.rows.length === 0) {
-        return res.status(404).json({ error: "Invoice not found" });
-      }
+    const invoice = await query(
+      "SELECT status, invoice_number FROM invoices WHERE id = $1 AND business_id = $2",
+      [id, businessId],
+    );
 
-      if (invoice.rows[0].status === "paid") {
-        return res.status(400).json({ error: "Cannot delete paid invoice" });
-      }
-
-      // Delete invoice items first
-      await query("DELETE FROM invoice_items WHERE invoice_id = $1", [id]);
-
-      // Delete invoice
-      await query("DELETE FROM invoices WHERE id = $1", [id]);
-
-      res.json({ success: true, message: "Invoice deleted successfully" });
-    } catch (error) {
-      console.error("Delete invoice error:", error);
-      res.status(500).json({ error: "Failed to delete invoice" });
+    if (invoice.rows.length === 0) {
+      return res.status(404).json({ error: "Invoice not found" });
     }
-  },
-);
+
+    if (invoice.rows[0].status === "paid") {
+      return res.status(400).json({ error: "Cannot delete paid invoice" });
+    }
+
+    await query("DELETE FROM invoice_items WHERE invoice_id = $1", [id]);
+    await query("DELETE FROM invoices WHERE id = $1", [id]);
+
+    res.json({ success: true, message: "Invoice deleted successfully" });
+  } catch (error) {
+    console.error("Delete invoice error:", error);
+    res.status(500).json({ error: "Failed to delete invoice" });
+  }
+});
+
 // PARAMETER ROUTES (with :id) - MUST come after specific routes
 router.post(
   "/:id/pay",
@@ -677,6 +670,11 @@ router.post(
 );
 router.get("/:id", authenticate, getInvoiceById);
 router.get("/", authenticate, getInvoices);
-router.post("/", authenticate, authorize("owner", "accountant"), createInvoice);
+router.post(
+  "/",
+  authenticate,
+  authorize("owner", "accountant", "cashier"),
+  createInvoice,
+);
 
 module.exports = router;
