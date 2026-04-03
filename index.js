@@ -15,6 +15,7 @@ const dashboardRoutes = require("./routes/dashboardRoutes");
 const mpesaRoutes = require("./routes/mpesaRoutes");
 const reportRoutes = require("./routes/reportRoutes");
 const teamRoutes = require("./routes/teamRoutes");
+const adminRoutes = require("./routes/adminRoutes");
 
 // Import rate limiter
 const rateLimiter = require("./middleware/rateLimiter");
@@ -86,6 +87,7 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/mpesa", mpesaRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/team", teamRoutes);
+app.use("/api/admin", adminRoutes);
 
 // Specific route limiters (applied after routes are defined)
 app.use("/api/auth/login", rateLimiter.authLimiter);
