@@ -107,11 +107,6 @@ router.post("/callback", async (req, res) => {
       const { ResultCode, ResultDesc, CheckoutRequestID, CallbackMetadata } =
         stkCallback;
 
-      // ResultCode 0 = Success
-      // ResultCode 1032 = Request cancelled by user
-      // ResultCode 1037 = Timeout
-      // Other codes = Various failures
-
       if (ResultCode === 0) {
         // Payment successful
         const metadata = {};
@@ -125,7 +120,6 @@ router.post("/callback", async (req, res) => {
         console.log(`   Receipt: ${metadata.MpesaReceiptNumber}`);
         console.log(`   Amount: ${metadata.Amount}`);
 
-        // Update transaction
         const transaction = await query(
           `UPDATE transactions 
            SET status = 'completed', 
@@ -139,8 +133,6 @@ router.post("/callback", async (req, res) => {
 
         if (transaction.rows.length > 0) {
           const { invoice_id, amount } = transaction.rows[0];
-
-          // Update invoice
           await query(
             `UPDATE invoices 
              SET amount_paid = amount_paid + $1,
@@ -151,15 +143,12 @@ router.post("/callback", async (req, res) => {
              WHERE id = $2`,
             [amount, invoice_id],
           );
-
           console.log(
             `✅ Invoice ${invoice_id} updated with payment of ${amount}`,
           );
         }
       } else if (ResultCode === 1032) {
-        // Payment cancelled by user
         console.log(`❌ Payment cancelled by user: ${ResultDesc}`);
-
         await query(
           `UPDATE transactions 
            SET status = 'failed', 
@@ -168,9 +157,7 @@ router.post("/callback", async (req, res) => {
           [CheckoutRequestID],
         );
       } else if (ResultCode === 1037) {
-        // Payment timeout
         console.log(`⏰ Payment timeout: ${ResultDesc}`);
-
         await query(
           `UPDATE transactions 
            SET status = 'failed', 
@@ -179,20 +166,8 @@ router.post("/callback", async (req, res) => {
           [CheckoutRequestID],
         );
       } else {
-        // Other failures
         console.log(`❌ Payment failed: ${ResultCode} - ${ResultDesc}`);
-
-        let errorNote = "Payment failed";
-        if (ResultDesc && ResultDesc.toLowerCase().includes("insufficient")) {
-          errorNote = "Insufficient funds in M-Pesa account";
-        } else if (ResultDesc && ResultDesc.toLowerCase().includes("pin")) {
-          errorNote = "Incorrect M-Pesa PIN entered";
-        } else if (ResultDesc && ResultDesc.toLowerCase().includes("expired")) {
-          errorNote = "M-Pesa session expired";
-        } else {
-          errorNote = ResultDesc || "Payment failed";
-        }
-
+        let errorNote = ResultDesc || "Payment failed";
         await query(
           `UPDATE transactions 
            SET status = 'failed', 
@@ -213,9 +188,24 @@ router.post("/callback", async (req, res) => {
 // Check payment status with detailed error messages
 router.get("/status/:checkoutRequestId", authenticate, async (req, res) => {
   try {
-    const { checkoutRequestId } = req.params;
+    let { checkoutRequestId } = req.params;
 
-    // Check local database first for transaction status
+    // FIX: Validate checkoutRequestId
+    if (
+      !checkoutRequestId ||
+      checkoutRequestId === "undefined" ||
+      checkoutRequestId === "null" ||
+      checkoutRequestId === ""
+    ) {
+      return res.json({
+        success: true,
+        resultCode: "1",
+        resultDesc: "Payment pending. Waiting for confirmation.",
+        mpesaReceiptNumber: null,
+      });
+    }
+
+    // Check local database first
     const transaction = await query(
       `SELECT status, notes, mpesa_receipt_number, amount, created_at 
        FROM transactions 
@@ -225,7 +215,6 @@ router.get("/status/:checkoutRequestId", authenticate, async (req, res) => {
 
     if (transaction.rows.length > 0) {
       const tx = transaction.rows[0];
-
       let resultCode = "1";
       let resultDesc = tx.notes || "Payment pending";
       let mpesaReceiptNumber = tx.mpesa_receipt_number;
@@ -243,9 +232,6 @@ router.get("/status/:checkoutRequestId", authenticate, async (req, res) => {
         } else if (tx.notes && tx.notes.includes("insufficient")) {
           resultCode = "2001";
           resultDesc = "Insufficient funds";
-        } else if (tx.notes && tx.notes.includes("PIN")) {
-          resultCode = "2002";
-          resultDesc = "Incorrect PIN entered";
         } else {
           resultCode = "1001";
           resultDesc = tx.notes || "Payment failed";
@@ -260,24 +246,13 @@ router.get("/status/:checkoutRequestId", authenticate, async (req, res) => {
       });
     }
 
-    // If not in database yet, try to query Safaricom
-    try {
-      const result = await mpesaService.queryStatus(checkoutRequestId);
-      return res.json({
-        success: true,
-        resultCode: result.resultCode || "1",
-        resultDesc: result.resultDesc || "Pending",
-        mpesaReceiptNumber: result.mpesaReceiptNumber,
-      });
-    } catch (err) {
-      // If still pending, return pending status
-      return res.json({
-        success: true,
-        resultCode: "1",
-        resultDesc: "Payment pending. Waiting for confirmation.",
-        mpesaReceiptNumber: null,
-      });
-    }
+    // Return pending status if transaction not found
+    return res.json({
+      success: true,
+      resultCode: "1",
+      resultDesc: "Payment pending. Waiting for confirmation.",
+      mpesaReceiptNumber: null,
+    });
   } catch (error) {
     console.error("Status query error:", error);
     res.status(500).json({ error: error.message });
