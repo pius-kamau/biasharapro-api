@@ -16,9 +16,12 @@ const mpesaRoutes = require("./routes/mpesaRoutes");
 const reportRoutes = require("./routes/reportRoutes");
 const teamRoutes = require("./routes/teamRoutes");
 const adminRoutes = require("./routes/adminRoutes");
+const subscriptionRoutes = require("./routes/subscriptionRoutes");
 
-// Import rate limiter
+// Import middleware
 const rateLimiter = require("./middleware/rateLimiter");
+const { authenticate } = require("./middleware/auth");
+const { checkSubscription } = require("./middleware/subscription");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -78,16 +81,36 @@ app.use("/api/", rateLimiter.apiLimiter);
 app.use("/api/", rateLimiter.slowDownLimiter);
 
 // =====================================================
-// API ROUTES
+// API ROUTES (Public - No Auth)
 // =====================================================
 app.use("/api/auth", authRoutes);
-app.use("/api/products", productRoutes);
-app.use("/api/invoices", invoiceRoutes);
-app.use("/api/dashboard", dashboardRoutes);
-app.use("/api/mpesa", mpesaRoutes);
-app.use("/api/reports", reportRoutes);
-app.use("/api/team", teamRoutes);
-app.use("/api/admin", adminRoutes);
+
+// =====================================================
+// API ROUTES (Protected - With Auth & Subscription Check)
+// =====================================================
+// Products routes
+app.use("/api/products", authenticate, checkSubscription, productRoutes);
+
+// Invoices routes
+app.use("/api/invoices", authenticate, checkSubscription, invoiceRoutes);
+
+// Dashboard routes
+app.use("/api/dashboard", authenticate, checkSubscription, dashboardRoutes);
+
+// M-Pesa routes (payment routes need auth but subscription check is skipped for payment)
+app.use("/api/mpesa", authenticate, mpesaRoutes);
+
+// Reports routes
+app.use("/api/reports", authenticate, checkSubscription, reportRoutes);
+
+// Team routes
+app.use("/api/team", authenticate, checkSubscription, teamRoutes);
+
+// Admin routes (no subscription check for admin)
+app.use("/api/admin", authenticate, adminRoutes);
+
+// Subscription routes (no subscription check - they need to access even when expired)
+app.use("/api/subscription", authenticate, subscriptionRoutes);
 
 // Specific route limiters (applied after routes are defined)
 app.use("/api/auth/login", rateLimiter.authLimiter);
@@ -165,40 +188,82 @@ app.post("/api/mpesa/callback", express.json(), async (req, res) => {
         console.log(`   Receipt: ${metadata.MpesaReceiptNumber}`);
         console.log(`   Amount: ${metadata.Amount}`);
 
-        const transaction = await query(
-          `UPDATE transactions 
-           SET status = 'completed', 
-               mpesa_receipt_number = $1,
-               transaction_date = CURRENT_TIMESTAMP
-           WHERE mpesa_receipt_number = $2
-           RETURNING invoice_id, amount`,
-          [metadata.MpesaReceiptNumber, CheckoutRequestID],
+        // Check if this is a subscription payment or invoice payment
+        const subscription = await query(
+          `SELECT id, business_id, plan FROM subscriptions WHERE payment_reference = $1`,
+          [CheckoutRequestID],
         );
 
-        if (transaction.rows.length > 0) {
-          const { invoice_id, amount } = transaction.rows[0];
+        if (subscription.rows.length > 0) {
+          // Handle subscription payment
+          const { id, business_id, plan } = subscription.rows[0];
+
           await query(
-            `UPDATE invoices 
-             SET amount_paid = amount_paid + $1,
-                 status = CASE 
-                     WHEN amount_paid + $1 >= total_amount THEN 'paid'
-                     ELSE status
-                 END
+            `UPDATE subscriptions 
+             SET status = 'active', 
+                 expires_at = NOW() + INTERVAL '30 days',
+                 payment_reference = $1
              WHERE id = $2`,
-            [amount, invoice_id],
+            [metadata.MpesaReceiptNumber, id],
           );
-          console.log(
-            `✅ Invoice ${invoice_id} updated with payment of ${amount}`,
+
+          await query(
+            `UPDATE businesses 
+             SET subscription_status = 'active',
+                 subscription_plan = $1,
+                 last_payment_date = CURRENT_TIMESTAMP,
+                 payment_due_date = CURRENT_TIMESTAMP + INTERVAL '30 days'
+             WHERE id = $2`,
+            [plan, business_id],
           );
+
+          console.log(`✅ Subscription activated for business ${business_id}`);
+        } else {
+          // Handle invoice payment
+          const transaction = await query(
+            `UPDATE transactions 
+             SET status = 'completed', 
+                 mpesa_receipt_number = $1,
+                 transaction_date = CURRENT_TIMESTAMP
+             WHERE mpesa_receipt_number = $2
+             RETURNING invoice_id, amount`,
+            [metadata.MpesaReceiptNumber, CheckoutRequestID],
+          );
+
+          if (transaction.rows.length > 0) {
+            const { invoice_id, amount } = transaction.rows[0];
+            await query(
+              `UPDATE invoices 
+               SET amount_paid = amount_paid + $1,
+                   status = CASE 
+                       WHEN amount_paid + $1 >= total_amount THEN 'paid'
+                       ELSE status
+                   END
+               WHERE id = $2`,
+              [amount, invoice_id],
+            );
+            console.log(
+              `✅ Invoice ${invoice_id} updated with payment of ${amount}`,
+            );
+          }
         }
       } else {
         console.log(`❌ Payment failed: ${ResultDesc}`);
+
+        // Update transaction or subscription as failed
         await query(
           `UPDATE transactions 
            SET status = 'failed', 
                notes = $1
            WHERE mpesa_receipt_number = $2`,
           [ResultDesc, CheckoutRequestID],
+        );
+
+        await query(
+          `UPDATE subscriptions 
+           SET status = 'failed'
+           WHERE payment_reference = $1`,
+          [CheckoutRequestID],
         );
       }
     }
@@ -218,6 +283,7 @@ app.get("/api/test-rate-limit", (req, res) => {
     remaining: req.rateLimit?.remaining,
   });
 });
+
 // =====================================================
 // ERROR HANDLING
 // =====================================================
