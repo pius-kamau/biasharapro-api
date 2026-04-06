@@ -530,23 +530,7 @@ const retryETIMS = async (req, res) => {
 // =====================================================
 
 // SPECIFIC ROUTES (no parameters) - MUST come first
-router.get("/transactions", authenticate, async (req, res) => {
-  try {
-    const { businessId } = req.user;
-    const result = await query(
-      `SELECT t.*, i.invoice_number 
-       FROM transactions t
-       LEFT JOIN invoices i ON t.invoice_id = i.id
-       WHERE t.business_id = $1
-       ORDER BY t.created_at DESC`,
-      [businessId],
-    );
-    res.json({ success: true, data: result.rows });
-  } catch (error) {
-    console.error("Get transactions error:", error);
-    res.status(500).json({ error: "Failed to get transactions" });
-  }
-});
+
 
 // GET all invoices
 router.get("/", authenticate, getInvoices);
