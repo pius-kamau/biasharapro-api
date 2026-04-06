@@ -11,11 +11,11 @@ const generateInvoiceEmailHTML = (invoice, business) => {
     .map(
       (item) => `
         <tr>
-            <td style="padding: 8px; border-bottom: 1px solid #e2e8f0;">${item.product_name}<\/td>
-            <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: center;">${item.quantity}<\/td>
-            <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: right;">KES ${item.unit_price.toLocaleString()}<\/td>
-            <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: right;">KES ${item.total.toLocaleString()}<\/td>
-         \n
+            <td style="padding: 8px; border-bottom: 1px solid #e2e8f0;">${item.product_name}</td>
+            <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: center;">${item.quantity}</td>
+            <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: right;">KES ${item.unit_price.toLocaleString()}</td>
+            <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: right;">KES ${item.total.toLocaleString()}</td>
+         </tr>
     `,
     )
     .join("");
@@ -57,19 +57,19 @@ const generateInvoiceEmailHTML = (invoice, business) => {
                         ${invoice.customer_email ? `<p><strong>Email:</strong> ${invoice.customer_email}</p>` : ""}
                     </div>
 
-                     <table>
+                    <table>
                         <thead>
-                             <tr>
+                            <tr>
                                 <th>Item</th>
                                 <th style="text-align: center;">Qty</th>
                                 <th style="text-align: right;">Unit Price</th>
                                 <th style="text-align: right;">Total</th>
-                             </tr>
+                            </tr>
                         </thead>
                         <tbody>
                             ${itemsHtml}
                         </tbody>
-                     </table>
+                    </table>
 
                     <div class="total">
                         <p>Subtotal: KES ${invoice.subtotal.toLocaleString()}</p>
@@ -548,6 +548,17 @@ router.get("/transactions", authenticate, async (req, res) => {
   }
 });
 
+// GET all invoices (must come BEFORE /:id routes)
+router.get("/", authenticate, getInvoices);
+
+// POST create invoice (must come BEFORE /:id routes)
+router.post(
+  "/",
+  authenticate,
+  authorize("owner", "accountant", "cashier"),
+  createInvoice,
+);
+
 // EMAIL INVOICE ENDPOINT (specific parameter route)
 router.post(
   "/:id/email",
@@ -597,7 +608,7 @@ router.post(
 
       const { data, error } = await resend.emails.send({
         from: `"${invoice.business_name}" <onboarding@resend.dev>`,
-        to: ["07299kama@gmail.com"],
+        to: [email],
         subject: `Invoice ${invoice.invoice_number} from ${invoice.business_name}`,
         html: html,
       });
@@ -619,7 +630,32 @@ router.post(
   },
 );
 
-// Delete invoice - ONLY OWNER can delete
+// PAYMENT ROUTE
+router.post(
+  "/:id/pay",
+  authenticate,
+  authorize("owner", "accountant", "cashier"),
+  recordPayment,
+);
+
+// eTIMS ROUTES
+router.post(
+  "/:id/etims",
+  authenticate,
+  authorize("owner", "accountant"),
+  submitToETIMS,
+);
+
+router.get("/:id/etims", authenticate, getETIMSStatus);
+
+router.post(
+  "/:id/etims/retry",
+  authenticate,
+  authorize("owner", "accountant"),
+  retryETIMS,
+);
+
+// DELETE INVOICE - ONLY OWNER can delete
 router.delete("/:id", authenticate, authorize("owner"), async (req, res) => {
   try {
     const { id } = req.params;
@@ -648,33 +684,7 @@ router.delete("/:id", authenticate, authorize("owner"), async (req, res) => {
   }
 });
 
-// PARAMETER ROUTES (with :id) - MUST come after specific routes
-router.post(
-  "/:id/pay",
-  authenticate,
-  authorize("owner", "accountant", "cashier"),
-  recordPayment,
-);
-router.post(
-  "/:id/etims",
-  authenticate,
-  authorize("owner", "accountant"),
-  submitToETIMS,
-);
-router.get("/:id/etims", authenticate, getETIMSStatus);
-router.post(
-  "/:id/etims/retry",
-  authenticate,
-  authorize("owner", "accountant"),
-  retryETIMS,
-);
+// GET single invoice (must come LAST - after all specific routes)
 router.get("/:id", authenticate, getInvoiceById);
-router.get("/", authenticate, getInvoices);
-router.post(
-  "/",
-  authenticate,
-  authorize("owner", "accountant", "cashier"),
-  createInvoice,
-);
 
 module.exports = router;
