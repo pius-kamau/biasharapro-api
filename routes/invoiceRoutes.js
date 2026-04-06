@@ -526,20 +526,33 @@ const retryETIMS = async (req, res) => {
 };
 
 // =====================================================
-// ROUTES - SIMPLIFIED VERSION
+// ROUTES - CORRECT ORDER (Specific routes FIRST)
 // =====================================================
+
+// SPECIFIC ROUTES (no parameters) - MUST come first
+router.get("/transactions", authenticate, async (req, res) => {
+  try {
+    const { businessId } = req.user;
+    const result = await query(
+      `SELECT t.*, i.invoice_number 
+       FROM transactions t
+       LEFT JOIN invoices i ON t.invoice_id = i.id
+       WHERE t.business_id = $1
+       ORDER BY t.created_at DESC`,
+      [businessId],
+    );
+    res.json({ success: true, data: result.rows });
+  } catch (error) {
+    console.error("Get transactions error:", error);
+    res.status(500).json({ error: "Failed to get transactions" });
+  }
+});
 
 // GET all invoices
 router.get("/", authenticate, getInvoices);
 
-// GET single invoice
-router.get("/:id", authenticate, getInvoiceById);
-
 // POST create invoice
 router.post("/", authenticate, authorize("owner", "accountant", "cashier"), createInvoice);
-
-// POST record payment
-router.post("/:id/pay", authenticate, authorize("owner", "accountant", "cashier"), recordPayment);
 
 // POST email invoice
 router.post("/:id/email", authenticate, authorize("owner", "accountant"), async (req, res) => {
@@ -601,6 +614,14 @@ router.post("/:id/email", authenticate, authorize("owner", "accountant"), async 
   }
 });
 
+// POST record payment
+router.post("/:id/pay", authenticate, authorize("owner", "accountant", "cashier"), recordPayment);
+
+// eTIMS routes
+router.post("/:id/etims", authenticate, authorize("owner", "accountant"), submitToETIMS);
+router.get("/:id/etims", authenticate, getETIMSStatus);
+router.post("/:id/etims/retry", authenticate, authorize("owner", "accountant"), retryETIMS);
+
 // DELETE invoice
 router.delete("/:id", authenticate, authorize("owner"), async (req, res) => {
   try {
@@ -630,28 +651,7 @@ router.delete("/:id", authenticate, authorize("owner"), async (req, res) => {
   }
 });
 
-// eTIMS routes
-router.post("/:id/etims", authenticate, authorize("owner", "accountant"), submitToETIMS);
-router.get("/:id/etims", authenticate, getETIMSStatus);
-router.post("/:id/etims/retry", authenticate, authorize("owner", "accountant"), retryETIMS);
-
-// Transactions route
-router.get("/transactions", authenticate, async (req, res) => {
-  try {
-    const { businessId } = req.user;
-    const result = await query(
-      `SELECT t.*, i.invoice_number 
-       FROM transactions t
-       LEFT JOIN invoices i ON t.invoice_id = i.id
-       WHERE t.business_id = $1
-       ORDER BY t.created_at DESC`,
-      [businessId],
-    );
-    res.json({ success: true, data: result.rows });
-  } catch (error) {
-    console.error("Get transactions error:", error);
-    res.status(500).json({ error: "Failed to get transactions" });
-  }
-});
+// GET single invoice (MUST be LAST - catches all /:id routes)
+router.get("/:id", authenticate, getInvoiceById);
 
 module.exports = router;
