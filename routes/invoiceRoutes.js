@@ -526,7 +526,7 @@ const retryETIMS = async (req, res) => {
 };
 
 // =====================================================
-// ROUTES - ORDER MATTERS! Specific routes BEFORE parameter routes
+// ROUTES - CORRECT ORDER (Specific routes FIRST)
 // =====================================================
 
 // SPECIFIC ROUTES (no parameters) - MUST come first
@@ -548,10 +548,10 @@ router.get("/transactions", authenticate, async (req, res) => {
   }
 });
 
-// GET all invoices (must come BEFORE /:id routes)
+// GET all invoices
 router.get("/", authenticate, getInvoices);
 
-// POST create invoice (must come BEFORE /:id routes)
+// POST create invoice
 router.post(
   "/",
   authenticate,
@@ -559,7 +559,7 @@ router.post(
   createInvoice,
 );
 
-// EMAIL INVOICE ENDPOINT (specific parameter route)
+// POST email invoice
 router.post(
   "/:id/email",
   authenticate,
@@ -576,9 +576,9 @@ router.post(
 
       const invoiceResult = await query(
         `SELECT i.*, b.name as business_name, b.email as business_email, b.kra_pin
-         FROM invoices i
-         JOIN businesses b ON i.business_id = b.id
-         WHERE i.id = $1 AND i.business_id = $2`,
+       FROM invoices i
+       JOIN businesses b ON i.business_id = b.id
+       WHERE i.id = $1 AND i.business_id = $2`,
         [id, businessId],
       );
 
@@ -587,14 +587,12 @@ router.post(
       }
 
       const invoice = invoiceResult.rows[0];
-
       const itemsResult = await query(
         `SELECT product_name, quantity, unit_price, total
-         FROM invoice_items
-         WHERE invoice_id = $1`,
+       FROM invoice_items
+       WHERE invoice_id = $1`,
         [id],
       );
-
       invoice.items = itemsResult.rows;
 
       const html = generateInvoiceEmailHTML(invoice, {
@@ -630,7 +628,7 @@ router.post(
   },
 );
 
-// PAYMENT ROUTE
+// POST record payment
 router.post(
   "/:id/pay",
   authenticate,
@@ -638,16 +636,14 @@ router.post(
   recordPayment,
 );
 
-// eTIMS ROUTES
+// eTIMS routes
 router.post(
   "/:id/etims",
   authenticate,
   authorize("owner", "accountant"),
   submitToETIMS,
 );
-
 router.get("/:id/etims", authenticate, getETIMSStatus);
-
 router.post(
   "/:id/etims/retry",
   authenticate,
@@ -655,14 +651,14 @@ router.post(
   retryETIMS,
 );
 
-// DELETE INVOICE - ONLY OWNER can delete
+// DELETE invoice
 router.delete("/:id", authenticate, authorize("owner"), async (req, res) => {
   try {
     const { id } = req.params;
     const { businessId } = req.user;
 
     const invoice = await query(
-      "SELECT status, invoice_number FROM invoices WHERE id = $1 AND business_id = $2",
+      "SELECT status FROM invoices WHERE id = $1 AND business_id = $2",
       [id, businessId],
     );
 
@@ -684,7 +680,7 @@ router.delete("/:id", authenticate, authorize("owner"), async (req, res) => {
   }
 });
 
-// GET single invoice (must come LAST - after all specific routes)
+// GET single invoice (MUST be LAST - catches all /:id routes)
 router.get("/:id", authenticate, getInvoiceById);
 
 module.exports = router;
