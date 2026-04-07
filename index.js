@@ -17,7 +17,6 @@ const reportRoutes = require("./routes/reportRoutes");
 const teamRoutes = require("./routes/teamRoutes");
 const adminRoutes = require("./routes/adminRoutes");
 const subscriptionRoutes = require("./routes/subscriptionRoutes");
-const { checkSubscription } = require("./middleware/subscription");
 
 // Import middleware
 const rateLimiter = require("./middleware/rateLimiter");
