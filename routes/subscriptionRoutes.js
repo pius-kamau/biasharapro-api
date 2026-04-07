@@ -46,7 +46,7 @@ router.get("/info", authenticate, async (req, res) => {
   }
 });
 
-// Initiate subscription payment with real M-Pesa
+// Initiate subscription payment
 router.post("/pay", authenticate, async (req, res) => {
   try {
     const { businessId } = req.user;
@@ -56,7 +56,7 @@ router.post("/pay", authenticate, async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Format phone number to 254XXXXXXXXX format
+    // Format phone number
     let formattedPhone = phoneNumber.toString().trim();
     if (formattedPhone.startsWith("0")) {
       formattedPhone = "254" + formattedPhone.substring(1);
@@ -75,28 +75,28 @@ router.post("/pay", authenticate, async (req, res) => {
     );
 
     const accountReference = `SUB-${subscription.rows[0].id}`;
-    const transactionDesc = `BiasharaPro ${plan} subscription`;
+    const transactionDesc = `${plan} subscription`;
+
+    // Get callback URL from environment
+    const callbackURL = `${process.env.BASE_URL}/api/subscription/callback`;
+
+    console.log("Subscription Callback URL:", callbackURL);
 
     // Initiate M-Pesa STK Push
     const mpesaResponse = await mpesaService.stkPush(
       formattedPhone,
-      amount,
+      Math.round(parseFloat(amount)),
       accountReference,
       transactionDesc,
+      callbackURL,
     );
 
     if (!mpesaResponse.success) {
-      // Update subscription as failed
-      await query(
-        `UPDATE subscriptions 
-                 SET status = 'failed', payment_reference = $1
-                 WHERE id = $2`,
-        [mpesaResponse.checkoutRequestId || "failed", subscription.rows[0].id],
-      );
-
+      await query(`UPDATE subscriptions SET status = 'failed' WHERE id = $1`, [
+        subscription.rows[0].id,
+      ]);
       return res.status(400).json({
         error: mpesaResponse.error || "Failed to initiate payment",
-        checkoutRequestId: mpesaResponse.checkoutRequestId,
       });
     }
 
@@ -108,6 +108,7 @@ router.post("/pay", authenticate, async (req, res) => {
       [mpesaResponse.checkoutRequestId, subscription.rows[0].id],
     );
 
+    // Return the checkoutRequestId in the data object (matches invoice payment structure)
     res.json({
       success: true,
       message:
@@ -128,16 +129,21 @@ router.post("/pay", authenticate, async (req, res) => {
 router.get("/status/:checkoutRequestId", authenticate, async (req, res) => {
   try {
     const { checkoutRequestId } = req.params;
+    const { businessId } = req.user;
 
     const subscription = await query(
-      `SELECT status, payment_reference, plan, business_id 
+      `SELECT status, plan, amount 
              FROM subscriptions 
-             WHERE payment_reference = $1`,
-      [checkoutRequestId],
+             WHERE payment_reference = $1 AND business_id = $2`,
+      [checkoutRequestId, businessId],
     );
 
     if (subscription.rows.length === 0) {
-      return res.json({ success: true, status: "pending" });
+      return res.json({
+        success: true,
+        status: "pending",
+        message: "Payment still processing",
+      });
     }
 
     const sub = subscription.rows[0];
@@ -146,23 +152,24 @@ router.get("/status/:checkoutRequestId", authenticate, async (req, res) => {
       success: true,
       status: sub.status === "active" ? "completed" : "pending",
       subscriptionId: sub.id,
+      plan: sub.plan,
+      amount: sub.amount,
     });
   } catch (error) {
     console.error("Status check error:", error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: "Failed to check payment status" });
   }
 });
 
-// M-Pesa callback URL for subscription payments
-router.post("/callback", async (req, res) => {
+// M-Pesa callback for subscriptions
+router.post("/callback", express.json(), async (req, res) => {
   try {
     console.log(
       "Subscription callback received:",
       JSON.stringify(req.body, null, 2),
     );
 
-    const callbackData = req.body;
-    const stkCallback = callbackData.Body?.stkCallback;
+    const stkCallback = req.body.Body?.stkCallback;
 
     if (stkCallback) {
       const { ResultCode, ResultDesc, CheckoutRequestID, CallbackMetadata } =
@@ -196,10 +203,9 @@ router.post("/callback", async (req, res) => {
           await query(
             `UPDATE subscriptions 
                          SET status = 'active', 
-                             expires_at = NOW() + INTERVAL '30 days',
-                             payment_reference = $1
-                         WHERE id = $2`,
-            [metadata.MpesaReceiptNumber, id],
+                             expires_at = NOW() + INTERVAL '30 days'
+                         WHERE id = $1`,
+            [id],
           );
 
           // Update business subscription status
@@ -237,8 +243,8 @@ router.post("/callback", async (req, res) => {
   }
 });
 
-// Manually activate subscription (for testing if needed)
-router.post("/activate/:subscriptionId", authenticate, async (req, res) => {
+// Simulate payment for testing (remove in production)
+router.post("/simulate/:subscriptionId", authenticate, async (req, res) => {
   try {
     const { subscriptionId } = req.params;
     const { businessId } = req.user;
@@ -277,7 +283,7 @@ router.post("/activate/:subscriptionId", authenticate, async (req, res) => {
       message: "Subscription activated successfully!",
     });
   } catch (error) {
-    console.error("Activation error:", error);
+    console.error("Simulate error:", error);
     res.status(500).json({ error: "Failed to activate subscription" });
   }
 });
