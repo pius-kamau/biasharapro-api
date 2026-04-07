@@ -3,7 +3,21 @@ const { query } = require("../config/database");
 
 const authenticate = async (req, res, next) => {
   try {
-    const token = req.cookies.token || req.headers.authorization?.split(" ")[1];
+    // Get token from Authorization header or cookies
+    let token = null;
+
+    // Check Authorization header first
+    if (
+      req.headers.authorization &&
+      req.headers.authorization.startsWith("Bearer")
+    ) {
+      token = req.headers.authorization.split(" ")[1];
+    }
+
+    // If not in header, check cookies
+    if (!token && req.cookies && req.cookies.token) {
+      token = req.cookies.token;
+    }
 
     if (!token) {
       return res.status(401).json({ error: "Authentication required" });
