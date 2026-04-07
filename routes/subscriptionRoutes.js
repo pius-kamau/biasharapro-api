@@ -46,17 +46,24 @@ router.get("/info", authenticate, async (req, res) => {
   }
 });
 
-// Initiate subscription payment
+// Initiate subscription payment - USING SAME PATTERN AS INVOICE
 router.post("/pay", authenticate, async (req, res) => {
   try {
     const { businessId } = req.user;
     const { plan, amount, phoneNumber } = req.body;
 
+    console.log("=== SUBSCRIPTION PAYMENT ===");
+    console.log("Business ID:", businessId);
+    console.log("Plan:", plan);
+    console.log("Amount:", amount);
+    console.log("Phone:", phoneNumber);
+
+    // Validate
     if (!plan || !amount || !phoneNumber) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Format phone number
+    // Format phone number (SAME as invoice payment)
     let formattedPhone = phoneNumber.toString().trim();
     if (formattedPhone.startsWith("0")) {
       formattedPhone = "254" + formattedPhone.substring(1);
@@ -77,13 +84,15 @@ router.post("/pay", authenticate, async (req, res) => {
     const accountReference = `SUB-${subscription.rows[0].id}`;
     const transactionDesc = `${plan} subscription`;
 
-    // Get callback URL from environment
-    const callbackURL = `${process.env.BASE_URL}/api/subscription/callback`;
+    // USE THE SAME CALLBACK URL THAT WORKS FOR INVOICES
+    // Your invoice payments use /api/mpesa/callback - let's use that
+    const callbackURL =
+      "https://biasharapro-api.onrender.com/api/mpesa/callback";
 
-    console.log("Subscription Callback URL:", callbackURL);
+    console.log("Callback URL:", callbackURL);
 
-    // Initiate M-Pesa STK Push
-    const mpesaResponse = await mpesaService.stkPush(
+    // Initiate M-Pesa (SAME service as invoice)
+    const result = await mpesaService.stkPush(
       formattedPhone,
       Math.round(parseFloat(amount)),
       accountReference,
@@ -91,324 +100,64 @@ router.post("/pay", authenticate, async (req, res) => {
       callbackURL,
     );
 
-    if (!mpesaResponse.success) {
+    console.log("M-Pesa result:", result);
+
+    if (!result.success) {
       await query(`UPDATE subscriptions SET status = 'failed' WHERE id = $1`, [
         subscription.rows[0].id,
       ]);
-      return res.status(400).json({
-        error: mpesaResponse.error || "Failed to initiate payment",
-      });
+      return res.status(400).json({ error: result.error });
     }
 
-    // Update subscription with checkout request ID
+    // Update subscription
     await query(
       `UPDATE subscriptions 
              SET payment_reference = $1
              WHERE id = $2`,
-      [mpesaResponse.checkoutRequestId, subscription.rows[0].id],
+      [result.checkoutRequestId, subscription.rows[0].id],
     );
 
-    // Return the checkoutRequestId in the data object (matches invoice payment structure)
+    // Return SAME format as invoice payment
     res.json({
       success: true,
-      message:
-        "M-Pesa payment initiated. Check your phone for the STK push prompt.",
+      message: "Payment initiated successfully",
       data: {
-        checkoutRequestId: mpesaResponse.checkoutRequestId,
+        checkoutRequestId: result.checkoutRequestId,
         subscriptionId: subscription.rows[0].id,
-        merchantRequestId: mpesaResponse.merchantRequestId,
       },
     });
   } catch (error) {
     console.error("Subscription payment error:", error);
-    res.status(500).json({ error: "Failed to process payment" });
+    res
+      .status(500)
+      .json({ error: error.message || "Failed to process payment" });
   }
 });
 
-// Check subscription payment status
+// Check payment status
 router.get("/status/:checkoutRequestId", authenticate, async (req, res) => {
   try {
     const { checkoutRequestId } = req.params;
     const { businessId } = req.user;
 
     const subscription = await query(
-      `SELECT status, plan, amount 
-             FROM subscriptions 
+      `SELECT status FROM subscriptions 
              WHERE payment_reference = $1 AND business_id = $2`,
       [checkoutRequestId, businessId],
     );
 
     if (subscription.rows.length === 0) {
-      return res.json({
-        success: true,
-        status: "pending",
-        message: "Payment still processing",
-      });
+      return res.json({ success: true, status: "pending" });
     }
-
-    const sub = subscription.rows[0];
 
     res.json({
       success: true,
-      status: sub.status === "active" ? "completed" : "pending",
-      subscriptionId: sub.id,
-      plan: sub.plan,
-      amount: sub.amount,
+      status:
+        subscription.rows[0].status === "active" ? "completed" : "pending",
     });
   } catch (error) {
     console.error("Status check error:", error);
-    res.status(500).json({ error: "Failed to check payment status" });
-  }
-});
-
-// M-Pesa callback for subscriptions
-router.post("/callback", express.json(), async (req, res) => {
-  try {
-    console.log(
-      "Subscription callback received:",
-      JSON.stringify(req.body, null, 2),
-    );
-
-    const stkCallback = req.body.Body?.stkCallback;
-
-    if (stkCallback) {
-      const { ResultCode, ResultDesc, CheckoutRequestID, CallbackMetadata } =
-        stkCallback;
-
-      if (ResultCode === 0) {
-        // Payment successful
-        const metadata = {};
-        if (CallbackMetadata?.Item) {
-          CallbackMetadata.Item.forEach((item) => {
-            metadata[item.Name] = item.Value;
-          });
-        }
-
-        console.log(
-          `✅ Subscription payment successful for ${CheckoutRequestID}`,
-        );
-        console.log(`   Receipt: ${metadata.MpesaReceiptNumber}`);
-        console.log(`   Amount: ${metadata.Amount}`);
-
-        // Get subscription
-        const subscription = await query(
-          `SELECT id, business_id, plan FROM subscriptions WHERE payment_reference = $1`,
-          [CheckoutRequestID],
-        );
-
-        if (subscription.rows.length > 0) {
-          const { id, business_id, plan } = subscription.rows[0];
-
-          // Update subscription status
-          await query(
-            `UPDATE subscriptions 
-                         SET status = 'active', 
-                             expires_at = NOW() + INTERVAL '30 days'
-                         WHERE id = $1`,
-            [id],
-          );
-
-          // Update business subscription status
-          await query(
-            `UPDATE businesses 
-                         SET subscription_status = 'active',
-                             subscription_plan = $1,
-                             last_payment_date = CURRENT_TIMESTAMP,
-                             payment_due_date = CURRENT_TIMESTAMP + INTERVAL '30 days'
-                         WHERE id = $2`,
-            [plan, business_id],
-          );
-
-          console.log(
-            `✅ Subscription activated for business ${business_id} with plan ${plan}`,
-          );
-        }
-      } else {
-        console.log(`❌ Subscription payment failed: ${ResultDesc}`);
-
-        // Update subscription as failed
-        await query(
-          `UPDATE subscriptions 
-                     SET status = 'failed'
-                     WHERE payment_reference = $1`,
-          [CheckoutRequestID],
-        );
-      }
-    }
-
-    res.json({ ResultCode: 0, ResultDesc: "Success" });
-  } catch (error) {
-    console.error("Subscription callback error:", error);
-    res.json({ ResultCode: 1, ResultDesc: "Failed" });
-  }
-});
-
-// Simulate payment for testing (remove in production)
-router.post("/simulate/:subscriptionId", authenticate, async (req, res) => {
-  try {
-    const { subscriptionId } = req.params;
-    const { businessId } = req.user;
-
-    const subscription = await query(
-      `SELECT plan, business_id FROM subscriptions WHERE id = $1 AND business_id = $2`,
-      [subscriptionId, businessId],
-    );
-
-    if (subscription.rows.length === 0) {
-      return res.status(404).json({ error: "Subscription not found" });
-    }
-
-    const { plan } = subscription.rows[0];
-
-    await query(
-      `UPDATE subscriptions 
-             SET status = 'active', 
-                 expires_at = NOW() + INTERVAL '30 days'
-             WHERE id = $1`,
-      [subscriptionId],
-    );
-
-    await query(
-      `UPDATE businesses 
-             SET subscription_status = 'active',
-                 subscription_plan = $1,
-                 last_payment_date = CURRENT_TIMESTAMP,
-                 payment_due_date = CURRENT_TIMESTAMP + INTERVAL '30 days'
-             WHERE id = $2`,
-      [plan, businessId],
-    );
-
-    res.json({
-      success: true,
-      message: "Subscription activated successfully!",
-    });
-  } catch (error) {
-    console.error("Simulate error:", error);
-    res.status(500).json({ error: "Failed to activate subscription" });
-  }
-});
-
-// Initiate subscription payment
-router.post("/pay", authenticate, async (req, res) => {
-  try {
-    const { businessId } = req.user;
-    const { plan, amount, phoneNumber } = req.body;
-
-    console.log("Subscription payment request:", {
-      businessId,
-      plan,
-      amount,
-      phoneNumber,
-    });
-
-    // Validate required fields
-    if (!plan || !amount || !phoneNumber) {
-      console.log("Missing fields:", {
-        plan: !!plan,
-        amount: !!amount,
-        phoneNumber: !!phoneNumber,
-      });
-      return res.status(400).json({
-        error: "Missing required fields",
-        details: { plan: !!plan, amount: !!amount, phoneNumber: !!phoneNumber },
-      });
-    }
-
-    // Format phone number
-    let formattedPhone = phoneNumber.toString().trim();
-    if (formattedPhone.startsWith("0")) {
-      formattedPhone = "254" + formattedPhone.substring(1);
-    } else if (formattedPhone.startsWith("+")) {
-      formattedPhone = formattedPhone.substring(1);
-    } else if (!formattedPhone.startsWith("254")) {
-      formattedPhone = "254" + formattedPhone;
-    }
-
-    console.log("Formatted phone:", formattedPhone);
-
-    // Check if business exists
-    const businessCheck = await query(
-      `SELECT id, subscription_status FROM businesses WHERE id = $1`,
-      [businessId],
-    );
-
-    if (businessCheck.rows.length === 0) {
-      return res.status(404).json({ error: "Business not found" });
-    }
-
-    // Create subscription record
-    const subscription = await query(
-      `INSERT INTO subscriptions (business_id, plan, amount, status, payment_method)
-             VALUES ($1, $2, $3, 'pending', 'mpesa')
-             RETURNING id`,
-      [businessId, plan, amount],
-    );
-
-    console.log("Subscription created:", subscription.rows[0].id);
-
-    const accountReference = `SUB-${subscription.rows[0].id}`;
-    const transactionDesc = `${plan} subscription`;
-
-    // Get callback URL from environment
-    const baseUrl =
-      process.env.BASE_URL || "https://biasharapro-api.onrender.com";
-    const callbackURL = `${baseUrl}/api/subscription/callback`;
-
-    console.log("Subscription Callback URL:", callbackURL);
-    console.log("BASE_URL:", baseUrl);
-
-    // Check if M-Pesa service is available
-    if (!mpesaService || typeof mpesaService.stkPush !== "function") {
-      console.error("M-Pesa service not available");
-      return res.status(500).json({ error: "Payment service unavailable" });
-    }
-
-    // Initiate M-Pesa STK Push
-    const mpesaResponse = await mpesaService.stkPush(
-      formattedPhone,
-      Math.round(parseFloat(amount)),
-      accountReference,
-      transactionDesc,
-      callbackURL,
-    );
-
-    console.log("M-Pesa response:", mpesaResponse);
-
-    if (!mpesaResponse.success) {
-      await query(`UPDATE subscriptions SET status = 'failed' WHERE id = $1`, [
-        subscription.rows[0].id,
-      ]);
-      return res.status(400).json({
-        error: mpesaResponse.error || "Failed to initiate payment",
-        details: mpesaResponse,
-      });
-    }
-
-    // Update subscription with checkout request ID
-    await query(
-      `UPDATE subscriptions 
-             SET payment_reference = $1
-             WHERE id = $2`,
-      [mpesaResponse.checkoutRequestId, subscription.rows[0].id],
-    );
-
-    // Return the checkoutRequestId in the data object
-    res.json({
-      success: true,
-      message:
-        "M-Pesa payment initiated. Check your phone for the STK push prompt.",
-      data: {
-        checkoutRequestId: mpesaResponse.checkoutRequestId,
-        subscriptionId: subscription.rows[0].id,
-        merchantRequestId: mpesaResponse.merchantRequestId,
-      },
-    });
-  } catch (error) {
-    console.error("Subscription payment error:", error);
-    res.status(500).json({
-      error: "Failed to process payment",
-      message: error.message,
-    });
+    res.status(500).json({ error: "Failed to check status" });
   }
 });
 
