@@ -288,4 +288,128 @@ router.post("/simulate/:subscriptionId", authenticate, async (req, res) => {
   }
 });
 
+// Initiate subscription payment
+router.post("/pay", authenticate, async (req, res) => {
+  try {
+    const { businessId } = req.user;
+    const { plan, amount, phoneNumber } = req.body;
+
+    console.log("Subscription payment request:", {
+      businessId,
+      plan,
+      amount,
+      phoneNumber,
+    });
+
+    // Validate required fields
+    if (!plan || !amount || !phoneNumber) {
+      console.log("Missing fields:", {
+        plan: !!plan,
+        amount: !!amount,
+        phoneNumber: !!phoneNumber,
+      });
+      return res.status(400).json({
+        error: "Missing required fields",
+        details: { plan: !!plan, amount: !!amount, phoneNumber: !!phoneNumber },
+      });
+    }
+
+    // Format phone number
+    let formattedPhone = phoneNumber.toString().trim();
+    if (formattedPhone.startsWith("0")) {
+      formattedPhone = "254" + formattedPhone.substring(1);
+    } else if (formattedPhone.startsWith("+")) {
+      formattedPhone = formattedPhone.substring(1);
+    } else if (!formattedPhone.startsWith("254")) {
+      formattedPhone = "254" + formattedPhone;
+    }
+
+    console.log("Formatted phone:", formattedPhone);
+
+    // Check if business exists
+    const businessCheck = await query(
+      `SELECT id, subscription_status FROM businesses WHERE id = $1`,
+      [businessId],
+    );
+
+    if (businessCheck.rows.length === 0) {
+      return res.status(404).json({ error: "Business not found" });
+    }
+
+    // Create subscription record
+    const subscription = await query(
+      `INSERT INTO subscriptions (business_id, plan, amount, status, payment_method)
+             VALUES ($1, $2, $3, 'pending', 'mpesa')
+             RETURNING id`,
+      [businessId, plan, amount],
+    );
+
+    console.log("Subscription created:", subscription.rows[0].id);
+
+    const accountReference = `SUB-${subscription.rows[0].id}`;
+    const transactionDesc = `${plan} subscription`;
+
+    // Get callback URL from environment
+    const baseUrl =
+      process.env.BASE_URL || "https://biasharapro-api.onrender.com";
+    const callbackURL = `${baseUrl}/api/subscription/callback`;
+
+    console.log("Subscription Callback URL:", callbackURL);
+    console.log("BASE_URL:", baseUrl);
+
+    // Check if M-Pesa service is available
+    if (!mpesaService || typeof mpesaService.stkPush !== "function") {
+      console.error("M-Pesa service not available");
+      return res.status(500).json({ error: "Payment service unavailable" });
+    }
+
+    // Initiate M-Pesa STK Push
+    const mpesaResponse = await mpesaService.stkPush(
+      formattedPhone,
+      Math.round(parseFloat(amount)),
+      accountReference,
+      transactionDesc,
+      callbackURL,
+    );
+
+    console.log("M-Pesa response:", mpesaResponse);
+
+    if (!mpesaResponse.success) {
+      await query(`UPDATE subscriptions SET status = 'failed' WHERE id = $1`, [
+        subscription.rows[0].id,
+      ]);
+      return res.status(400).json({
+        error: mpesaResponse.error || "Failed to initiate payment",
+        details: mpesaResponse,
+      });
+    }
+
+    // Update subscription with checkout request ID
+    await query(
+      `UPDATE subscriptions 
+             SET payment_reference = $1
+             WHERE id = $2`,
+      [mpesaResponse.checkoutRequestId, subscription.rows[0].id],
+    );
+
+    // Return the checkoutRequestId in the data object
+    res.json({
+      success: true,
+      message:
+        "M-Pesa payment initiated. Check your phone for the STK push prompt.",
+      data: {
+        checkoutRequestId: mpesaResponse.checkoutRequestId,
+        subscriptionId: subscription.rows[0].id,
+        merchantRequestId: mpesaResponse.merchantRequestId,
+      },
+    });
+  } catch (error) {
+    console.error("Subscription payment error:", error);
+    res.status(500).json({
+      error: "Failed to process payment",
+      message: error.message,
+    });
+  }
+});
+
 module.exports = router;

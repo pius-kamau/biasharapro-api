@@ -284,6 +284,16 @@ app.get("/api/test-rate-limit", (req, res) => {
   });
 });
 
+// Debug endpoint for subscription
+app.get("/api/debug/subscription", (req, res) => {
+  res.json({
+    base_url: process.env.BASE_URL,
+    mpesa_shortcode: process.env.MPESA_SHORTCODE ? "set" : "missing",
+    mpesa_consumer_key: process.env.MPESA_CONSUMER_KEY ? "set" : "missing",
+    node_env: process.env.NODE_ENV,
+    timestamp: new Date().toISOString(),
+  });
+});
 // =====================================================
 // ERROR HANDLING
 // =====================================================
