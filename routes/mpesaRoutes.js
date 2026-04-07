@@ -165,5 +165,40 @@ router.post("/callback", express.json(), async (req, res) => {
     res.json({ ResultCode: 1, ResultDesc: "Failed" });
   }
 });
+// Check payment status
+router.get("/status/:checkoutRequestId", authenticate, async (req, res) => {
+  try {
+    const { checkoutRequestId } = req.params;
+    const { businessId } = req.user;
 
+    // Find transaction by checkout request ID
+    const transaction = await query(
+      `SELECT t.status, t.amount, i.invoice_number
+             FROM transactions t
+             LEFT JOIN invoices i ON t.invoice_id = i.id
+             WHERE t.mpesa_receipt_number = $1 AND t.business_id = $2`,
+      [checkoutRequestId, businessId],
+    );
+
+    if (transaction.rows.length === 0) {
+      return res.json({
+        success: true,
+        status: "pending",
+        message: "Payment still processing",
+      });
+    }
+
+    const tx = transaction.rows[0];
+
+    res.json({
+      success: true,
+      status: tx.status === "completed" ? "completed" : "pending",
+      amount: tx.amount,
+      invoiceNumber: tx.invoice_number,
+    });
+  } catch (error) {
+    console.error("Status check error:", error);
+    res.status(500).json({ error: "Failed to check payment status" });
+  }
+});
 module.exports = router;
