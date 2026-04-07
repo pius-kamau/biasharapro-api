@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const { authenticate, authorize } = require("../middleware/auth");
+const { authenticate } = require("../middleware/auth");
 const { query } = require("../config/database");
 
 // Get all invoices
@@ -52,105 +52,94 @@ router.get("/:id", authenticate, async (req, res) => {
 });
 
 // Create invoice
-router.post(
-  "/",
-  authenticate,
-  authorize("owner", "accountant", "cashier"),
-  async (req, res) => {
-    try {
-      const { businessId } = req.user;
-      const { customerName, items } = req.body;
+router.post("/", authenticate, async (req, res) => {
+  try {
+    const { businessId } = req.user;
+    const { customerName, items } = req.body;
 
-      if (!customerName || !items || items.length === 0) {
-        return res
-          .status(400)
-          .json({ error: "Customer name and items required" });
-      }
+    if (!customerName || !items || items.length === 0) {
+      return res
+        .status(400)
+        .json({ error: "Customer name and items required" });
+    }
 
-      let subtotal = 0;
-      for (const item of items) {
-        subtotal += item.quantity * item.unitPrice;
-      }
-      const vatAmount = subtotal * 0.16;
-      const totalAmount = subtotal + vatAmount;
-      const invoiceNumber = `INV-${Date.now()}`;
+    let subtotal = 0;
+    for (const item of items) {
+      subtotal += item.quantity * item.unitPrice;
+    }
+    const vatAmount = subtotal * 0.16;
+    const totalAmount = subtotal + vatAmount;
+    const invoiceNumber = `INV-${Date.now()}`;
 
-      const result = await query(
-        `INSERT INTO invoices (business_id, invoice_number, customer_name, subtotal, vat_amount, total_amount, status)
+    const result = await query(
+      `INSERT INTO invoices (business_id, invoice_number, customer_name, subtotal, vat_amount, total_amount, status)
        VALUES ($1, $2, $3, $4, $5, $6, 'pending')
        RETURNING id, invoice_number`,
-        [
-          businessId,
-          invoiceNumber,
-          customerName,
-          subtotal,
-          vatAmount,
-          totalAmount,
-        ],
-      );
+      [
+        businessId,
+        invoiceNumber,
+        customerName,
+        subtotal,
+        vatAmount,
+        totalAmount,
+      ],
+    );
 
-      res.status(201).json({
-        success: true,
-        message: "Invoice created successfully",
-        data: result.rows[0],
-      });
-    } catch (error) {
-      console.error("Create invoice error:", error);
-      res.status(500).json({ error: "Failed to create invoice" });
-    }
-  },
-);
+    res.status(201).json({
+      success: true,
+      message: "Invoice created successfully",
+      data: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Create invoice error:", error);
+    res.status(500).json({ error: "Failed to create invoice" });
+  }
+});
 
 // Record payment
-router.post(
-  "/:id/pay",
-  authenticate,
-  authorize("owner", "accountant", "cashier"),
-  async (req, res) => {
-    try {
-      const { businessId } = req.user;
-      const { id } = req.params;
-      const { amount } = req.body;
+router.post("/:id/pay", authenticate, async (req, res) => {
+  try {
+    const { businessId } = req.user;
+    const { id } = req.params;
+    const { amount } = req.body;
 
-      if (!amount || amount <= 0) {
-        return res.status(400).json({ error: "Valid amount required" });
-      }
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ error: "Valid amount required" });
+    }
 
-      const invoiceResult = await query(
-        "SELECT total_amount, amount_paid FROM invoices WHERE id = $1 AND business_id = $2",
-        [id, businessId],
-      );
+    const invoiceResult = await query(
+      "SELECT total_amount, amount_paid FROM invoices WHERE id = $1 AND business_id = $2",
+      [id, businessId],
+    );
 
-      if (invoiceResult.rows.length === 0) {
-        return res.status(404).json({ error: "Invoice not found" });
-      }
+    if (invoiceResult.rows.length === 0) {
+      return res.status(404).json({ error: "Invoice not found" });
+    }
 
-      const invoice = invoiceResult.rows[0];
-      const newAmountPaid =
-        parseFloat(invoice.amount_paid) + parseFloat(amount);
-      const newStatus =
-        newAmountPaid >= invoice.total_amount ? "paid" : "pending";
+    const invoice = invoiceResult.rows[0];
+    const newAmountPaid = parseFloat(invoice.amount_paid) + parseFloat(amount);
+    const newStatus =
+      newAmountPaid >= invoice.total_amount ? "paid" : "pending";
 
-      await query(
-        `UPDATE invoices 
+    await query(
+      `UPDATE invoices 
        SET amount_paid = $1, status = $2 
        WHERE id = $3`,
-        [newAmountPaid, newStatus, id],
-      );
+      [newAmountPaid, newStatus, id],
+    );
 
-      res.json({
-        success: true,
-        message: `Payment of ${amount} recorded successfully`,
-      });
-    } catch (error) {
-      console.error("Record payment error:", error);
-      res.status(500).json({ error: "Failed to record payment" });
-    }
-  },
-);
+    res.json({
+      success: true,
+      message: `Payment of ${amount} recorded successfully`,
+    });
+  } catch (error) {
+    console.error("Record payment error:", error);
+    res.status(500).json({ error: "Failed to record payment" });
+  }
+});
 
 // Delete invoice
-router.delete("/:id", authenticate, authorize("owner"), async (req, res) => {
+router.delete("/:id", authenticate, async (req, res) => {
   try {
     const { businessId } = req.user;
     const { id } = req.params;
