@@ -22,6 +22,7 @@ const subscriptionRoutes = require("./routes/subscriptionRoutes");
 const rateLimiter = require("./middleware/rateLimiter");
 const { authenticate } = require("./middleware/auth");
 const { checkSubscription } = require("./middleware/subscription");
+const { checkPlanLimit } = require("./middleware/subscriptionLimits");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
