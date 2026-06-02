@@ -1,16 +1,28 @@
 const { query } = require("../config/database");
 
 const checkSubscription = async (req, res, next) => {
-  // Skip subscription check for payment and callback endpoints
-  const skipPaths = ["/pay", "/callback", "/status"];
-  if (skipPaths.some((path) => req.path.includes(path))) {
-    console.log(`Skipping subscription check for: ${req.method} ${req.path}`);
+  // CRITICAL: Skip ALL checks for payment and status endpoints
+  // This must be the FIRST thing in this function
+  const isPaymentEndpoint =
+    req.path === "/pay" ||
+    req.path === "/status" ||
+    req.path.includes("/status") ||
+    req.url === "/pay" ||
+    req.url.includes("/pay");
+
+  if (isPaymentEndpoint) {
+    console.log(
+      `🚫 [SUBSCRIBE] SKIPPING - Payment endpoint: ${req.method} ${req.path}`,
+    );
     return next();
   }
+
+  console.log(`🔍 [SUBSCRIBE] Checking: ${req.method} ${req.path}`);
 
   try {
     // Skip for admin users
     if (req.user && req.user.role === "admin") {
+      console.log(`👑 [SUBSCRIBE] Admin user - skipping`);
       return next();
     }
 
@@ -28,6 +40,9 @@ const checkSubscription = async (req, res, next) => {
     }
 
     const business = result.rows[0];
+    console.log(
+      `📊 [SUBSCRIBE] Business ${businessId} status: ${business.subscription_status}`,
+    );
 
     // Check if trial has expired
     if (business.subscription_status === "trial" && business.trial_ends_at) {
@@ -39,7 +54,7 @@ const checkSubscription = async (req, res, next) => {
           `UPDATE businesses SET subscription_status = 'expired' WHERE id = $1`,
           [businessId],
         );
-
+        console.log(`❌ [SUBSCRIBE] Trial expired - blocking`);
         return res.status(403).json({
           error: "Your free trial has expired. Please subscribe to continue.",
           code: "TRIAL_EXPIRED",
@@ -50,6 +65,7 @@ const checkSubscription = async (req, res, next) => {
 
     // Check if subscription is expired
     if (business.subscription_status === "expired") {
+      console.log(`❌ [SUBSCRIBE] Subscription expired - blocking`);
       return res.status(403).json({
         error: "Your subscription has expired. Please renew.",
         code: "SUBSCRIPTION_EXPIRED",
@@ -57,9 +73,10 @@ const checkSubscription = async (req, res, next) => {
       });
     }
 
+    console.log(`✅ [SUBSCRIBE] Access granted`);
     next();
   } catch (error) {
-    console.error("Subscription check error:", error);
+    console.error("[SUBSCRIBE] Error:", error);
     next();
   }
 };
