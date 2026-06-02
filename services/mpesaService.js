@@ -1,103 +1,171 @@
-const axios = require("axios");
-const crypto = require("crypto");
+const express = require("express");
+const router = express.Router();
+const { authenticate } = require("../middleware/auth");
+const { query } = require("../config/database");
+const mpesaService = require("../services/mpesaService");
 
-const getAccessToken = async () => {
+// Get subscription info
+router.get("/info", authenticate, async (req, res) => {
   try {
-    const auth = Buffer.from(
-      `${process.env.MPESA_CONSUMER_KEY}:${process.env.MPESA_CONSUMER_SECRET}`,
-    ).toString("base64");
+    const { businessId } = req.user;
 
-    const response = await axios.get(
-      "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials",
-      {
-        headers: {
-          Authorization: `Basic ${auth}`,
-        },
-      },
+    const result = await query(
+      `SELECT subscription_status, trial_ends_at, subscription_plan 
+             FROM businesses 
+             WHERE id = $1`,
+      [businessId],
     );
 
-    return response.data.access_token;
-  } catch (error) {
-    console.error("Get access token error:", error);
-    throw error;
-  }
-};
-
-const stkPush = async (
-  phoneNumber,
-  amount,
-  accountReference,
-  transactionDesc,
-  callbackURL = null,
-) => {
-  try {
-    const timestamp = new Date()
-      .toISOString()
-      .replace(/[^0-9]/g, "")
-      .slice(0, 14);
-    const password = Buffer.from(
-      `${process.env.MPESA_SHORTCODE}${process.env.MPESA_PASSKEY}${timestamp}`,
-    ).toString("base64");
-
-    // Use provided callback URL or fallback to environment variable
-    const finalCallbackURL =
-      callbackURL || `${process.env.BASE_URL}/api/mpesa/callback`;
-
-    console.log("STK Push Callback URL:", finalCallbackURL);
-
-    const data = {
-      BusinessShortCode: process.env.MPESA_SHORTCODE,
-      Password: password,
-      Timestamp: timestamp,
-      TransactionType: "CustomerPayBillOnline",
-      Amount: amount,
-      PartyA: phoneNumber,
-      PartyB: process.env.MPESA_SHORTCODE,
-      PhoneNumber: phoneNumber,
-      CallBackURL: finalCallbackURL,
-      AccountReference: accountReference.substring(0, 12),
-      TransactionDesc: transactionDesc.substring(0, 13),
-    };
-
-    console.log("STK Push Request:", JSON.stringify(data, null, 2));
-
-    const accessToken = await getAccessToken();
-
-    const response = await axios.post(
-      "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest",
-      data,
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-      },
-    );
-
-    console.log("STK Push Response:", JSON.stringify(response.data, null, 2));
-
-    if (response.data.ResponseCode === "0") {
-      return {
-        success: true,
-        checkoutRequestId: response.data.CheckoutRequestID,
-        merchantRequestId: response.data.MerchantRequestID,
-        responseCode: response.data.ResponseCode,
-        responseDescription: response.data.ResponseDescription,
-      };
-    } else {
-      return {
-        success: false,
-        error: response.data.ResponseDescription || "STK push failed",
-        responseCode: response.data.ResponseCode,
-      };
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Business not found" });
     }
-  } catch (error) {
-    console.error("STK Push error:", error.response?.data || error.message);
-    return {
-      success: false,
-      error: error.response?.data?.errorMessage || error.message,
-    };
-  }
-};
 
-module.exports = { stkPush, getAccessToken };
+    const business = result.rows[0];
+    const now = new Date();
+    const trialEnds = business.trial_ends_at
+      ? new Date(business.trial_ends_at)
+      : null;
+    let trialDaysLeft = 0;
+
+    if (trialEnds && now < trialEnds) {
+      trialDaysLeft = Math.ceil((trialEnds - now) / (1000 * 60 * 60 * 24));
+    }
+
+    res.json({
+      success: true,
+      data: {
+        status: business.subscription_status || "trial",
+        trial_days_left: trialDaysLeft,
+        trial_ends_at: business.trial_ends_at,
+        current_plan: business.subscription_plan || "starter",
+      },
+    });
+  } catch (error) {
+    console.error("Subscription info error:", error);
+    res.status(500).json({ error: "Failed to get subscription info" });
+  }
+});
+
+// Initiate subscription payment - COMPLETE BYPASS
+router.post("/pay", authenticate, async (req, res) => {
+  console.log("🔥🔥🔥 PAYMENT ENDPOINT HIT 🔥🔥🔥");
+
+  try {
+    const { businessId } = req.user;
+    const { plan, amount, phoneNumber } = req.body;
+
+    console.log("=== SUBSCRIPTION PAYMENT ===");
+    console.log("Business ID:", businessId);
+    console.log("Plan:", plan);
+    console.log("Amount:", amount);
+    console.log("Phone:", phoneNumber);
+
+    // Validate required fields
+    if (!plan || !amount || !phoneNumber) {
+      console.log("❌ Missing fields");
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Format phone number (SAME as invoice payment)
+    let formattedPhone = phoneNumber.toString().trim();
+    if (formattedPhone.startsWith("0")) {
+      formattedPhone = "254" + formattedPhone.substring(1);
+    } else if (formattedPhone.startsWith("+")) {
+      formattedPhone = formattedPhone.substring(1);
+    } else if (!formattedPhone.startsWith("254")) {
+      formattedPhone = "254" + formattedPhone;
+    }
+
+    console.log("Formatted phone:", formattedPhone);
+
+    // FORCE BYPASS - Create subscription record without checking status
+    const subscription = await query(
+      `INSERT INTO subscriptions (business_id, plan, amount, status, payment_method)
+             VALUES ($1, $2, $3, 'pending', 'mpesa')
+             RETURNING id`,
+      [businessId, plan, amount],
+    );
+
+    console.log("Subscription created with ID:", subscription.rows[0].id);
+
+    const accountReference = `SUB-${subscription.rows[0].id}`;
+    const transactionDesc = `${plan} subscription`;
+    const callbackURL =
+      "https://biasharapro-api.onrender.com/api/mpesa/callback";
+
+    console.log("Callback URL:", callbackURL);
+    console.log("Calling M-Pesa STK Push...");
+
+    // Initiate M-Pesa
+    const result = await mpesaService.stkPush(
+      formattedPhone,
+      Math.round(parseFloat(amount)),
+      accountReference,
+      transactionDesc,
+      callbackURL,
+    );
+
+    console.log("M-Pesa result:", result);
+
+    if (!result.success) {
+      await query(`UPDATE subscriptions SET status = 'failed' WHERE id = $1`, [
+        subscription.rows[0].id,
+      ]);
+      console.log("❌ M-Pesa failed:", result.error);
+      return res.status(400).json({ error: result.error });
+    }
+
+    // Update subscription with payment reference
+    await query(
+      `UPDATE subscriptions 
+             SET payment_reference = $1
+             WHERE id = $2`,
+      [result.checkoutRequestId, subscription.rows[0].id],
+    );
+
+    console.log("✅ Payment initiated successfully");
+    res.json({
+      success: true,
+      message: "Payment initiated successfully",
+      data: {
+        checkoutRequestId: result.checkoutRequestId,
+        subscriptionId: subscription.rows[0].id,
+      },
+    });
+  } catch (error) {
+    console.error("❌ Subscription payment error:", error);
+    res.status(500).json({
+      error: error.message || "Failed to process payment",
+      details: process.env.NODE_ENV === "development" ? error.stack : undefined,
+    });
+  }
+});
+
+// Check payment status
+router.get("/status/:checkoutRequestId", authenticate, async (req, res) => {
+  try {
+    const { checkoutRequestId } = req.params;
+    const { businessId } = req.user;
+
+    const subscription = await query(
+      `SELECT status FROM subscriptions 
+             WHERE payment_reference = $1 AND business_id = $2`,
+      [checkoutRequestId, businessId],
+    );
+
+    if (subscription.rows.length === 0) {
+      return res.json({ success: true, status: "pending" });
+    }
+
+    res.json({
+      success: true,
+      status:
+        subscription.rows[0].status === "active" ? "completed" : "pending",
+    });
+  } catch (error) {
+    console.error("Status check error:", error);
+    res.status(500).json({ error: "Failed to check status" });
+  }
+});
+
+module.exports = router;
