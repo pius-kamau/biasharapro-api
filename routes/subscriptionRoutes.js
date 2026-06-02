@@ -1,3 +1,51 @@
+const express = require("express");
+const router = express.Router();
+const { authenticate } = require("../middleware/auth");
+const { query } = require("../config/database");
+const mpesaService = require("../services/mpesaService");
+
+// Get subscription info
+router.get("/info", authenticate, async (req, res) => {
+  try {
+    const { businessId } = req.user;
+
+    const result = await query(
+      `SELECT subscription_status, trial_ends_at, subscription_plan 
+             FROM businesses 
+             WHERE id = $1`,
+      [businessId],
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Business not found" });
+    }
+
+    const business = result.rows[0];
+    const now = new Date();
+    const trialEnds = business.trial_ends_at
+      ? new Date(business.trial_ends_at)
+      : null;
+    let trialDaysLeft = 0;
+
+    if (trialEnds && now < trialEnds) {
+      trialDaysLeft = Math.ceil((trialEnds - now) / (1000 * 60 * 60 * 24));
+    }
+
+    res.json({
+      success: true,
+      data: {
+        status: business.subscription_status || "trial",
+        trial_days_left: trialDaysLeft,
+        trial_ends_at: business.trial_ends_at,
+        current_plan: business.subscription_plan || "starter",
+      },
+    });
+  } catch (error) {
+    console.error("Subscription info error:", error);
+    res.status(500).json({ error: "Failed to get subscription info" });
+  }
+});
+
 // Initiate subscription payment - NO SUBSCRIPTION CHECK (allow expired users to pay)
 router.post("/pay", authenticate, async (req, res) => {
   console.log("🔥🔥🔥 PAYMENT ENDPOINT HIT 🔥🔥🔥");
@@ -19,7 +67,6 @@ router.post("/pay", authenticate, async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Format phone number
     let formattedPhone = phoneNumber.toString().trim();
     if (formattedPhone.startsWith("0")) {
       formattedPhone = "254" + formattedPhone.substring(1);
@@ -30,14 +77,12 @@ router.post("/pay", authenticate, async (req, res) => {
     }
     console.log("Formatted phone:", formattedPhone);
 
-    // Check business exists
     const businessCheck = await query(
       `SELECT id, name, subscription_status FROM businesses WHERE id = $1`,
       [businessId],
     );
     console.log("Business check:", businessCheck.rows[0]);
 
-    // Create subscription record
     const subscription = await query(
       `INSERT INTO subscriptions (business_id, plan, amount, status, payment_method)
              VALUES ($1, $2, $3, 'pending', 'mpesa')
@@ -54,7 +99,6 @@ router.post("/pay", authenticate, async (req, res) => {
     console.log("Callback URL:", callbackURL);
     console.log("Calling M-Pesa STK Push...");
 
-    // Initiate M-Pesa
     const result = await mpesaService.stkPush(
       formattedPhone,
       Math.round(parseFloat(amount)),
@@ -96,3 +140,32 @@ router.post("/pay", authenticate, async (req, res) => {
       .json({ error: error.message || "Failed to process payment" });
   }
 });
+
+// Check payment status
+router.get("/status/:checkoutRequestId", authenticate, async (req, res) => {
+  try {
+    const { checkoutRequestId } = req.params;
+    const { businessId } = req.user;
+
+    const subscription = await query(
+      `SELECT status FROM subscriptions 
+             WHERE payment_reference = $1 AND business_id = $2`,
+      [checkoutRequestId, businessId],
+    );
+
+    if (subscription.rows.length === 0) {
+      return res.json({ success: true, status: "pending" });
+    }
+
+    res.json({
+      success: true,
+      status:
+        subscription.rows[0].status === "active" ? "completed" : "pending",
+    });
+  } catch (error) {
+    console.error("Status check error:", error);
+    res.status(500).json({ error: "Failed to check status" });
+  }
+});
+
+module.exports = router;
