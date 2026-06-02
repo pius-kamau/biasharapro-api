@@ -46,7 +46,7 @@ router.get("/info", authenticate, async (req, res) => {
   }
 });
 
-// Initiate subscription payment - USING SAME PATTERN AS INVOICE
+// Initiate subscription payment - NO SUBSCRIPTION CHECK (allow expired users to pay)
 router.post("/pay", authenticate, async (req, res) => {
   try {
     const { businessId } = req.user;
@@ -58,12 +58,10 @@ router.post("/pay", authenticate, async (req, res) => {
     console.log("Amount:", amount);
     console.log("Phone:", phoneNumber);
 
-    // Validate
     if (!plan || !amount || !phoneNumber) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Format phone number (SAME as invoice payment)
     let formattedPhone = phoneNumber.toString().trim();
     if (formattedPhone.startsWith("0")) {
       formattedPhone = "254" + formattedPhone.substring(1);
@@ -73,7 +71,6 @@ router.post("/pay", authenticate, async (req, res) => {
       formattedPhone = "254" + formattedPhone;
     }
 
-    // Create subscription record
     const subscription = await query(
       `INSERT INTO subscriptions (business_id, plan, amount, status, payment_method)
              VALUES ($1, $2, $3, 'pending', 'mpesa')
@@ -83,15 +80,11 @@ router.post("/pay", authenticate, async (req, res) => {
 
     const accountReference = `SUB-${subscription.rows[0].id}`;
     const transactionDesc = `${plan} subscription`;
-
-    // USE THE SAME CALLBACK URL THAT WORKS FOR INVOICES
-    // Your invoice payments use /api/mpesa/callback - let's use that
     const callbackURL =
       "https://biasharapro-api.onrender.com/api/mpesa/callback";
 
     console.log("Callback URL:", callbackURL);
 
-    // Initiate M-Pesa (SAME service as invoice)
     const result = await mpesaService.stkPush(
       formattedPhone,
       Math.round(parseFloat(amount)),
@@ -109,7 +102,6 @@ router.post("/pay", authenticate, async (req, res) => {
       return res.status(400).json({ error: result.error });
     }
 
-    // Update subscription
     await query(
       `UPDATE subscriptions 
              SET payment_reference = $1
@@ -117,7 +109,6 @@ router.post("/pay", authenticate, async (req, res) => {
       [result.checkoutRequestId, subscription.rows[0].id],
     );
 
-    // Return SAME format as invoice payment
     res.json({
       success: true,
       message: "Payment initiated successfully",

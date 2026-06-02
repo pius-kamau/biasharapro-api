@@ -1,9 +1,16 @@
 const { query } = require("../config/database");
 
 const checkSubscription = async (req, res, next) => {
+  // Skip subscription check for payment and callback endpoints
+  const skipPaths = ["/pay", "/callback", "/status"];
+  if (skipPaths.some((path) => req.path.includes(path))) {
+    console.log(`Skipping subscription check for: ${req.method} ${req.path}`);
+    return next();
+  }
+
   try {
     // Skip for admin users
-    if (req.user.role === "admin") {
+    if (req.user && req.user.role === "admin") {
       return next();
     }
 
@@ -11,8 +18,8 @@ const checkSubscription = async (req, res, next) => {
 
     const result = await query(
       `SELECT subscription_status, trial_ends_at 
-             FROM businesses 
-             WHERE id = $1`,
+       FROM businesses 
+       WHERE id = $1`,
       [businessId],
     );
 
@@ -41,6 +48,7 @@ const checkSubscription = async (req, res, next) => {
       }
     }
 
+    // Check if subscription is expired
     if (business.subscription_status === "expired") {
       return res.status(403).json({
         error: "Your subscription has expired. Please renew.",

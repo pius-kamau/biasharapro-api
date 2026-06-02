@@ -110,7 +110,8 @@ app.use("/api/team", authenticate, checkSubscription, teamRoutes);
 // Admin routes (no subscription check for admin)
 app.use("/api/admin", authenticate, adminRoutes);
 
-// Subscription routes (no subscription check - they need to access even when expired)
+// Subscription routes (NO subscription check - they need to access even when expired)
+// Payment must work even for expired users
 app.use("/api/subscription", authenticate, subscriptionRoutes);
 
 // Specific route limiters (applied after routes are defined)
@@ -295,6 +296,7 @@ app.get("/api/debug/subscription", (req, res) => {
     timestamp: new Date().toISOString(),
   });
 });
+
 // =====================================================
 // ERROR HANDLING
 // =====================================================
